@@ -226,6 +226,43 @@ namespace DeltaLake.Interfaces
         /// <returns>A <see cref="Task"/>representing applying the constraint operation.</returns>
         Task AddConstraintsAsync(IReadOnlyDictionary<string, string> constraints, CancellationToken cancellationToken);
 
+        /// <summary>
+        /// Sets Delta table configuration properties.
+        /// </summary>
+        /// <param name="properties">A collection of key-value pairs representing table configuration properties.</param>
+        /// <param name="cancellationToken">A <see cref="System.Threading.CancellationToken">cancellation token</see>.</param>
+        /// <returns>A <see cref="Task"/> representing the set properties operation.</returns>
+        Task SetTablePropertiesAsync(IReadOnlyDictionary<string, string> properties, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sets Delta table configuration properties.
+        /// </summary>
+        /// <param name="properties">A collection of key-value pairs representing table configuration properties.</param>
+        /// <param name="raiseIfNotExists">Whether to raise an error if a property does not exist.</param>
+        /// <param name="customMetadata">Optional custom metadata to include in the commit.</param>
+        /// <param name="cancellationToken">A <see cref="System.Threading.CancellationToken">cancellation token</see>.</param>
+        /// <returns>A <see cref="Task"/> representing the set properties operation.</returns>
+        Task SetTablePropertiesAsync(IReadOnlyDictionary<string, string> properties, bool raiseIfNotExists, IReadOnlyDictionary<string, string>? customMetadata, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Updates the table name and/or description metadata.
+        /// </summary>
+        /// <param name="name">The new table name, or null to leave unchanged.</param>
+        /// <param name="description">The new table description, or null to leave unchanged.</param>
+        /// <param name="cancellationToken">A <see cref="System.Threading.CancellationToken">cancellation token</see>.</param>
+        /// <returns>A <see cref="Task"/> representing the update metadata operation.</returns>
+        Task UpdateTableMetadataAsync(string? name, string? description, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Updates the table name and/or description metadata.
+        /// </summary>
+        /// <param name="name">The new table name, or null to leave unchanged.</param>
+        /// <param name="description">The new table description, or null to leave unchanged.</param>
+        /// <param name="customMetadata">Optional custom metadata to include in the commit.</param>
+        /// <param name="cancellationToken">A <see cref="System.Threading.CancellationToken">cancellation token</see>.</param>
+        /// <returns>A <see cref="Task"/> representing the update metadata operation.</returns>
+        Task UpdateTableMetadataAsync(string? name, string? description, IReadOnlyDictionary<string, string>? customMetadata, CancellationToken cancellationToken);
+
         #endregion Metadata Operations
 
         #region Maintenance Operations

@@ -1712,6 +1712,140 @@ pub extern "C" fn table_add_constraints(
     );
 }
 
+#[no_mangle]
+pub extern "C" fn table_set_properties(
+    mut runtime: NonNull<Runtime>,
+    mut table: NonNull<RawDeltaTable>,
+    properties: *mut Map,
+    raise_if_not_exists: bool,
+    custom_metadata: *mut Map,
+    cancellation_token: Option<&CancellationToken>,
+    callback: TableEmptyCallback,
+) {
+    let properties: HashMap<String, String> = unsafe {
+        Box::from_raw(properties)
+            .data
+            .into_iter()
+            .map(|(k, v)| (k, v.unwrap_or_default()))
+            .collect()
+    };
+    let custom_metadata: Option<HashMap<String, String>> = unsafe {
+        if custom_metadata.is_null() {
+            None
+        } else {
+            Some(
+                Box::from_raw(custom_metadata)
+                    .data
+                    .into_iter()
+                    .map(|(k, v)| (k, v.unwrap_or_default()))
+                    .collect(),
+            )
+        }
+    };
+
+    run_async_with_cancellation!(
+        runtime,
+        table,
+        cancellation_token,
+        rt,
+        tbl,
+        {
+            let mut cmd = tbl.table.clone().set_tbl_properties()
+                .with_properties(properties)
+                .with_raise_if_not_exists(raise_if_not_exists);
+
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: serde_json::Map<String, serde_json::Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                cmd = cmd.with_commit_properties(
+                    CommitProperties::default().with_metadata(json_metadata),
+                );
+            };
+
+            match cmd.into_future().await {
+                Ok(table) => unsafe {
+                    tbl.table = table;
+                    callback(std::ptr::null());
+                },
+                Err(error) => unsafe {
+                    callback(DeltaTableError::from_error(rt, error).into_raw());
+                },
+            }
+        },
+        { callback(std::ptr::null()) }
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn table_update_metadata(
+    mut runtime: NonNull<Runtime>,
+    mut table: NonNull<RawDeltaTable>,
+    name: *const ByteArrayRef,
+    description: *const ByteArrayRef,
+    custom_metadata: *mut Map,
+    cancellation_token: Option<&CancellationToken>,
+    callback: TableEmptyCallback,
+) {
+    let name_opt: Option<String> = if name.is_null() {
+        None
+    } else {
+        Some(unsafe { (*name).to_str().to_string() })
+    };
+    let description_opt: Option<String> = if description.is_null() {
+        None
+    } else {
+        Some(unsafe { (*description).to_str().to_string() })
+    };
+    let custom_metadata: Option<HashMap<String, String>> = unsafe {
+        if custom_metadata.is_null() {
+            None
+        } else {
+            Some(
+                Box::from_raw(custom_metadata)
+                    .data
+                    .into_iter()
+                    .map(|(k, v)| (k, v.unwrap_or_default()))
+                    .collect(),
+            )
+        }
+    };
+
+    run_async_with_cancellation!(
+        runtime,
+        table,
+        cancellation_token,
+        rt,
+        tbl,
+        {
+            let update = deltalake::operations::update_table_metadata::TableMetadataUpdate {
+                name: name_opt,
+                description: description_opt,
+            };
+            let mut cmd = tbl.table.clone().update_table_metadata()
+                .with_update(update);
+
+            if let Some(metadata) = custom_metadata {
+                let json_metadata: serde_json::Map<String, serde_json::Value> =
+                    metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
+                cmd = cmd.with_commit_properties(
+                    CommitProperties::default().with_metadata(json_metadata),
+                );
+            };
+
+            match cmd.into_future().await {
+                Ok(table) => unsafe {
+                    tbl.table = table;
+                    callback(std::ptr::null());
+                },
+                Err(error) => unsafe {
+                    callback(DeltaTableError::from_error(rt, error).into_raw());
+                },
+            }
+        },
+        { callback(std::ptr::null()) }
+    );
+}
+
 impl RawDeltaTable {
     fn new(table: deltalake::DeltaTable) -> Self {
         RawDeltaTable { table }

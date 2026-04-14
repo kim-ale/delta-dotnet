@@ -487,5 +487,11 @@ namespace DeltaLake.Bridge.Interop
 
         [DllImport("delta_rs_bridge", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void table_add_constraints([NativeTypeName("struct Runtime * _Nonnull")] Runtime* runtime, [NativeTypeName("struct RawDeltaTable * _Nonnull")] RawDeltaTable* table, [NativeTypeName("struct Map *")] Map* constraints, [NativeTypeName("struct Map *")] Map* custom_metadata, [NativeTypeName("const struct CancellationToken *")] CancellationToken* cancellation_token, [NativeTypeName("TableEmptyCallback")] IntPtr callback);
+
+        [DllImport("delta_rs_bridge", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void table_set_properties([NativeTypeName("struct Runtime * _Nonnull")] Runtime* runtime, [NativeTypeName("struct RawDeltaTable * _Nonnull")] RawDeltaTable* table, [NativeTypeName("struct Map *")] Map* properties, [NativeTypeName("bool")] byte raise_if_not_exists, [NativeTypeName("struct Map *")] Map* custom_metadata, [NativeTypeName("const struct CancellationToken *")] CancellationToken* cancellation_token, [NativeTypeName("TableEmptyCallback")] IntPtr callback);
+
+        [DllImport("delta_rs_bridge", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        public static extern void table_update_metadata([NativeTypeName("struct Runtime * _Nonnull")] Runtime* runtime, [NativeTypeName("struct RawDeltaTable * _Nonnull")] RawDeltaTable* table, [NativeTypeName("const struct ByteArrayRef *")] ByteArrayRef* name, [NativeTypeName("const struct ByteArrayRef *")] ByteArrayRef* description, [NativeTypeName("struct Map *")] Map* custom_metadata, [NativeTypeName("const struct CancellationToken *")] CancellationToken* cancellation_token, [NativeTypeName("TableEmptyCallback")] IntPtr callback);
     }
 }

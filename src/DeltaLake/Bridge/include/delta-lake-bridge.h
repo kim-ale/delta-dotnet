@@ -418,6 +418,22 @@ void table_add_constraints(struct Runtime *_Nonnull runtime,
                            const struct CancellationToken *cancellation_token,
                            TableEmptyCallback callback);
 
+void table_set_properties(struct Runtime *_Nonnull runtime,
+                          struct RawDeltaTable *_Nonnull table,
+                          struct Map *properties,
+                          bool raise_if_not_exists,
+                          struct Map *custom_metadata,
+                          const struct CancellationToken *cancellation_token,
+                          TableEmptyCallback callback);
+
+void table_update_metadata(struct Runtime *_Nonnull runtime,
+                           struct RawDeltaTable *_Nonnull table,
+                           const struct ByteArrayRef *name,
+                           const struct ByteArrayRef *description,
+                           struct Map *custom_metadata,
+                           const struct CancellationToken *cancellation_token,
+                           TableEmptyCallback callback);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus
