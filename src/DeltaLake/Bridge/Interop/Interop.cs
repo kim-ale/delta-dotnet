@@ -172,6 +172,9 @@ namespace DeltaLake.Bridge.Interop
 
         [NativeTypeName("struct Map *")]
         public Map* custom_metadata;
+
+        [NativeTypeName("struct ByteArrayRef")]
+        public ByteArrayRef metadata_id;
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

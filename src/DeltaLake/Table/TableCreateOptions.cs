@@ -55,5 +55,10 @@ namespace DeltaLake.Table
         /// Table metadata
         /// </summary>
         public Dictionary<string, string>? CustomMetadata { get; init; }
+
+        /// <summary>
+        /// Optional metadata ID (UUID string) for the table. If not set, a random UUID is generated.
+        /// </summary>
+        public string? MetadataId { get; set; }
     }
 }

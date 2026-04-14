@@ -21,7 +21,7 @@ use deltalake::{
         sql::sqlparser::ast::{Assignment, AssignmentTarget, Expr},
     },
     ensure_table_uri,
-    kernel::{transaction::CommitProperties, StructType, CommitInfo},
+    kernel::{transaction::CommitProperties, transaction::CommitBuilder, StructType, CommitInfo, MetadataExt},
     operations::vacuum::VacuumMode,
     protocol::SaveMode,
     DeltaTableBuilder
@@ -205,6 +205,7 @@ pub struct TableCreatOptions {
     configuration: *mut Map,
     storage_options: *mut Map,
     custom_metadata: *mut Map,
+    metadata_id: ByteArrayRef,
 }
 
 #[repr(C)]
@@ -327,13 +328,14 @@ pub extern "C" fn create_deltalake(
             .collect::<Vec<String>>()
     };
 
-    let (name, description, configuration, storage_options, custom_metadata) = unsafe {
+    let (name, description, configuration, storage_options, custom_metadata, metadata_id) = unsafe {
         (
             options.name.to_option_string(),
             options.description.to_option_string(),
             Map::into_map(options.configuration),
             Map::into_hash_map(options.storage_options),
             Map::into_hash_map(options.custom_metadata),
+            options.metadata_id.to_option_string(),
         )
     };
     let save_mode = unsafe {
@@ -368,6 +370,7 @@ pub extern "C" fn create_deltalake(
                 configuration,
                 storage_options,
                 custom_metadata,
+                metadata_id,
             )
             .await
             {
@@ -1731,6 +1734,7 @@ async fn create_delta_table(
     storage_options: Option<HashMap<String, String>>,
     #[allow(unused)]
     custom_metadata: Option<HashMap<String, String>>,
+    metadata_id: Option<String>,
 ) -> Result<deltalake::DeltaTable, DeltaTableError> {
     let url = ensure_table_uri(table_uri.as_str()).map_err(|e| DeltaTableError::from_error(runtime, e))?;
     let table = DeltaTableBuilder::from_url(url)
@@ -1763,9 +1767,39 @@ async fn create_delta_table(
         builder = builder.with_metadata(json_metadata);
     };*/
 
-    let table = builder
+    let mut table = builder
         .await
         .map_err(|error| DeltaTableError::from_error(runtime, error))?;
+
+    // If a custom metadata ID was requested, update the metadata after creation
+    if let Some(id) = metadata_id {
+        let metadata = table
+            .snapshot()
+            .map_err(|error| DeltaTableError::from_error(runtime, error))?
+            .metadata()
+            .clone();
+        let updated_metadata = metadata
+            .with_table_id(id)
+            .map_err(|error| DeltaTableError::from_error(runtime, deltalake::DeltaTableError::Kernel { source: error }))?;
+        let actions = vec![
+            deltalake::kernel::Action::Metadata(updated_metadata),
+        ];
+        {
+            let log_store = table.log_store();
+            let snapshot = table.snapshot().map_err(|error| DeltaTableError::from_error(runtime, error))?;
+            CommitBuilder::default()
+                .with_actions(actions)
+                .build(
+                    Some(snapshot as &dyn deltalake::kernel::transaction::TableReference),
+                    log_store,
+                    deltalake::protocol::DeltaOperation::Update { predicate: None },
+                )
+                .await
+                .map_err(|error| DeltaTableError::from_error(runtime, error))?;
+        }
+        table.update_state().await.map_err(|error| DeltaTableError::from_error(runtime, error))?;
+    }
+
     Ok(table)
 }
 
