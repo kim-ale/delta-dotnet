@@ -48,6 +48,53 @@ public class DeltaTableTests
     }
 
     [Fact]
+    public async Task Create_WithCustomMetadataId_MetadataIdMatches()
+    {
+        var uri = $"memory:///{Guid.NewGuid():N}/";
+        using IEngine engine = new DeltaEngine(EngineOptions.Default);
+        var builder = new Apache.Arrow.Schema.Builder();
+        builder.Field(fb =>
+        {
+            fb.Name("test");
+            fb.DataType(Int32Type.Default);
+            fb.Nullable(false);
+        });
+        var schema = builder.Build();
+        var customId = Guid.NewGuid().ToString();
+        using var table = await engine.CreateTableAsync(
+            new TableCreateOptions(uri, schema)
+            {
+                MetadataId = customId,
+            },
+            CancellationToken.None);
+        Assert.NotNull(table);
+        var metadata = table.Metadata();
+        Assert.Equal(customId, metadata.Id);
+    }
+
+    [Fact]
+    public async Task Create_WithoutMetadataId_AutoGeneratesId()
+    {
+        var uri = $"memory:///{Guid.NewGuid():N}/";
+        using IEngine engine = new DeltaEngine(EngineOptions.Default);
+        var builder = new Apache.Arrow.Schema.Builder();
+        builder.Field(fb =>
+        {
+            fb.Name("test");
+            fb.DataType(Int32Type.Default);
+            fb.Nullable(false);
+        });
+        var schema = builder.Build();
+        using var table = await engine.CreateTableAsync(
+            new TableCreateOptions(uri, schema),
+            CancellationToken.None);
+        Assert.NotNull(table);
+        var metadata = table.Metadata();
+        Assert.False(string.IsNullOrEmpty(metadata.Id));
+        Assert.True(Guid.TryParse(metadata.Id, out _));
+    }
+
+    [Fact]
     public async Task Create_Cancellation()
     {
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
