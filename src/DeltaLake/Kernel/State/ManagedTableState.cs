@@ -252,7 +252,7 @@ namespace DeltaLake.Kernel.State
 
             unsafe
             {
-                int partitionColumnCount = (int)Methods.get_partition_column_count(this.Snapshot(false));
+                int partitionColumnCount = (int)Methods.get_partition_column_count(this.Snapshot(refresh: false));
                 this.partitionList = (PartitionList*)Marshal.AllocHGlobal(sizeof(PartitionList));
 
                 // We set the length to 0 here and use it to track how many
@@ -261,7 +261,7 @@ namespace DeltaLake.Kernel.State
                 this.partitionList->Len = 0;
                 this.partitionList->Cols = (char**)Marshal.AllocHGlobal(sizeof(char*) * partitionColumnCount);
 
-                StringSliceIterator* partitionIterator = Methods.get_partition_columns(this.Snapshot(false));
+                StringSliceIterator* partitionIterator = Methods.get_partition_columns(this.Snapshot(refresh: false));
                 try
                 {
                     for (; ; )
@@ -295,7 +295,7 @@ namespace DeltaLake.Kernel.State
                 // predicate: null = no filter (read all rows)
                 // schema: null = no column projection (read all columns)
                 ExternResultHandleSharedScan scanRes = Methods.scan(
-                    this.Snapshot(false),
+                    this.Snapshot(refresh: false),
                     this.sharedExternEnginePtr,
                     predicate: null,
                     schema: null);
@@ -315,7 +315,7 @@ namespace DeltaLake.Kernel.State
 
             unsafe
             {
-                this.managedSchema = Methods.scan_logical_schema(this.Scan(false));
+                this.managedSchema = Methods.scan_logical_schema(this.Scan(refresh: false));
             }
         }
 
@@ -326,7 +326,7 @@ namespace DeltaLake.Kernel.State
 
             unsafe
             {
-                this.physicalSchema = Methods.scan_physical_schema(this.Scan(false));
+                this.physicalSchema = Methods.scan_physical_schema(this.Scan(refresh: false));
             }
         }
 
@@ -389,11 +389,11 @@ namespace DeltaLake.Kernel.State
                 // Refresh the necessary Kernel state together before initiating
                 // the fresh scan - no stale reads allowed!
                 //
-                SharedSnapshot* managedSnapshotPtr = this.Snapshot(true);
-                SharedSchema* managedSchemaPtr = this.Schema(true);
-                PartitionList* managedPartitionListPtr = this.PartitionList(true);
-                SharedScan* managedScanPtr = this.Scan(true);
-                SharedSchema* physicalSchema = this.PhysicalSchema(true);
+                SharedSnapshot* managedSnapshotPtr = this.Snapshot(refresh: true);
+                SharedSchema* managedSchemaPtr = this.Schema(refresh: true);
+                PartitionList* managedPartitionListPtr = this.PartitionList(refresh: true);
+                SharedScan* managedScanPtr = this.Scan(refresh: true);
+                SharedSchema* physicalSchema = this.PhysicalSchema(refresh: true);
                 // SharedGlobalScanState* managedGlobalScanStatePtr = this.GlobalScanState(true);
 
                 // Memory scoped to this scan
