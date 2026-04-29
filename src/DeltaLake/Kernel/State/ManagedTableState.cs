@@ -35,6 +35,7 @@ namespace DeltaLake.Kernel.State
         private unsafe SharedSchema* physicalSchema = null;
         private unsafe PartitionList* partitionList = null;
         private unsafe ArrowContext* arrowContext = null;
+        private ulong lastSnapshotVersion = ulong.MaxValue;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="ManagedTableState"/> class.
@@ -330,41 +331,70 @@ namespace DeltaLake.Kernel.State
             }
         }
 
-        // TODO: delta-kernel-rs upgrade coordination
-        // This code was migrated from snapshot()/scan() to the builder pattern as part of the
-        // v0.17.0 → v0.21.0 upgrade. For future kernel version bumps:
-        // 1. Check https://github.com/delta-incubator/delta-dotnet/pulls for existing upgrade PRs
-        // 2. Review delta-kernel-rs CHANGELOG for FFI breaking changes
-        // 3. Regenerate bindings via 'make generate-kernel-bindings' after updating delta-kernel-rs.version.txt
         private void RefreshSnapshot()
         {
-
-            this.DisposeSnapshot();
-
             unsafe
             {
-                // Step 1: Create snapshot builder
-                ExternResultHandleMutableFfiSnapshotBuilder builderRes = Methods.get_snapshot_builder(this.tableLocationSlice, this.sharedExternEnginePtr);
-                if (builderRes.tag != ExternResultHandleMutableFfiSnapshotBuilder_Tag.OkHandleMutableFfiSnapshotBuilder)
-                {
-                    throw KernelException.FromEngineError(builderRes.Anonymous.Anonymous2.err, "Failed to create snapshot builder from Delta Kernel.");
-                }
-                MutableFfiSnapshotBuilder* builderPtr = builderRes.Anonymous.Anonymous1.ok;
+                SharedSnapshot* oldSnapshot = this.managedPointInTimeSnapshot;
 
-                // Step 2: Build snapshot (latest version)
-                // snapshot_builder_build consumes the builder handle on both success and failure paths.
-                ExternResultHandleSharedSnapshot snapshotRes = Methods.snapshot_builder_build(builderPtr);
-                if (snapshotRes.tag != ExternResultHandleSharedSnapshot_Tag.OkHandleSharedSnapshot)
+                // Incremental path: if a previous snapshot exists, try to build
+                // incrementally from it. This only reads new log entries since
+                // the previous snapshot's version, avoiding a full log re-read.
+                if (oldSnapshot != null)
                 {
-                    throw KernelException.FromEngineError(snapshotRes.Anonymous.Anonymous2.err, "Failed to build table snapshot from Delta Kernel.");
+                    ExternResultHandleMutableFfiSnapshotBuilder builderRes = Methods.get_snapshot_builder_from(oldSnapshot, this.sharedExternEnginePtr);
+                    if (builderRes.tag == ExternResultHandleMutableFfiSnapshotBuilder_Tag.OkHandleMutableFfiSnapshotBuilder)
+                    {
+                        ExternResultHandleSharedSnapshot snapshotRes = Methods.snapshot_builder_build(builderRes.Anonymous.Anonymous1.ok);
+                        if (snapshotRes.tag == ExternResultHandleSharedSnapshot_Tag.OkHandleSharedSnapshot)
+                        {
+                            this.managedPointInTimeSnapshot = snapshotRes.Anonymous.Anonymous1.ok;
+                            Methods.free_snapshot(oldSnapshot);
+                            return;
+                        }
+                        // snapshot_builder_build consumes the builder on both success and failure paths.
+                    }
+                    // Incremental failed (e.g., log truncated). Fall through to full refresh.
                 }
 
-                this.managedPointInTimeSnapshot = snapshotRes.Anonymous.Anonymous1.ok;
+                // Full refresh path: first load or incremental failure.
+                this.managedPointInTimeSnapshot = null;
+                if (oldSnapshot != null) Methods.free_snapshot(oldSnapshot);
+
+                ExternResultHandleMutableFfiSnapshotBuilder fullBuilderRes = Methods.get_snapshot_builder(this.tableLocationSlice, this.sharedExternEnginePtr);
+                if (fullBuilderRes.tag != ExternResultHandleMutableFfiSnapshotBuilder_Tag.OkHandleMutableFfiSnapshotBuilder)
+                {
+                    throw KernelException.FromEngineError(fullBuilderRes.Anonymous.Anonymous2.err, "Failed to create snapshot builder from Delta Kernel.");
+                }
+
+                ExternResultHandleSharedSnapshot fullSnapshotRes = Methods.snapshot_builder_build(fullBuilderRes.Anonymous.Anonymous1.ok);
+                if (fullSnapshotRes.tag != ExternResultHandleSharedSnapshot_Tag.OkHandleSharedSnapshot)
+                {
+                    throw KernelException.FromEngineError(fullSnapshotRes.Anonymous.Anonymous2.err, "Failed to build table snapshot from Delta Kernel.");
+                }
+
+                this.managedPointInTimeSnapshot = fullSnapshotRes.Anonymous.Anonymous1.ok;
             }
         }
 
         private void RefreshArrowContext()
         {
+            unsafe
+            {
+                // Refresh the snapshot first to check for new commits.
+                SharedSnapshot* managedSnapshotPtr = this.Snapshot(refresh: true);
+
+                // If the snapshot version hasn't changed and we already have
+                // arrow data, skip the full cascade (Schema, PartitionList,
+                // Scan, PhysicalSchema, Arrow iteration). This makes the
+                // no-new-data polling case O(1).
+                ulong currentVersion = Methods.version(managedSnapshotPtr);
+                if (currentVersion == this.lastSnapshotVersion && this.arrowContext != null)
+                {
+                    return;
+                }
+                this.lastSnapshotVersion = currentVersion;
+            }
 
             this.DisposeArrowContext();
 
@@ -389,7 +419,7 @@ namespace DeltaLake.Kernel.State
                 // Refresh the necessary Kernel state together before initiating
                 // the fresh scan - no stale reads allowed!
                 //
-                SharedSnapshot* managedSnapshotPtr = this.Snapshot(refresh: true);
+                SharedSnapshot* managedSnapshotPtr = this.Snapshot(refresh: false);
                 SharedSchema* managedSchemaPtr = this.Schema(refresh: true);
                 PartitionList* managedPartitionListPtr = this.PartitionList(refresh: true);
                 SharedScan* managedScanPtr = this.Scan(refresh: true);
