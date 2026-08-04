@@ -41,6 +41,53 @@ public class CreateWriteTransactionTests
     }
 
     [Fact]
+    public async Task CreateWriteTransaction_Then_UpdateIncremental_Null_Advances_Bridge()
+    {
+        var info = DirectoryHelpers.CreateTempSubdirectory();
+        try
+        {
+            using var schemaBatch = TableHelpers.BuildBasicRecordBatch(0);
+            using var engine = new DeltaEngine(EngineOptions.Default);
+            using var table = await engine.CreateTableAsync(
+                new TableCreateOptions(info.FullName, schemaBatch.Schema),
+                CancellationToken.None);
+
+            var initialVersion = Assert.IsType<ulong>(table.Version());
+            var logDirectory = Path.Combine(info.FullName, "_delta_log");
+            var checkpointPath = Path.Combine(
+                logDirectory,
+                $"{initialVersion:D20}.checkpoint.parquet");
+            var jsonPath = Path.Combine(logDirectory, $"{initialVersion:D20}.json");
+
+            await table.CheckpointAsync(CancellationToken.None);
+            Assert.True(File.Exists(checkpointPath));
+
+            // The checkpoint keeps the table valid, while removing this JSON commit
+            // forces an unbounded incremental update to resume from the checkpoint.
+            File.Delete(jsonPath);
+
+            const string committedPath = "k.parquet";
+            var committedVersion = await table.CreateWriteTransactionAsync(
+                [new AddAction
+                {
+                    Path = committedPath,
+                    Size = 1024,
+                    ModificationTime = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                    DataChange = true,
+                }],
+                CancellationToken.None);
+
+            await table.UpdateIncrementalAsync(null, CancellationToken.None);
+
+            Assert.Equal((ulong)committedVersion, table.Version());
+        }
+        finally
+        {
+            info.Delete(true);
+        }
+    }
+
+    [Fact]
     public async Task CreateWriteTransaction_Multiple_Commits_Increment_Version()
     {
         var info = DirectoryHelpers.CreateTempSubdirectory();

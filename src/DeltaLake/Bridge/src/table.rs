@@ -646,11 +646,12 @@ async fn table_update_incremental_impl(
     table: &mut deltalake::DeltaTable,
     max_version: Option<u64>,
 ) -> Result<(), deltalake::DeltaTableError> {
-    let latest_version = table.get_latest_version().await?;
-    let max_version = if let Some(max_version) = max_version {
-        Some(std::cmp::min(max_version, latest_version))
-    } else {
-        None
+    let max_version = match max_version {
+        Some(max_version) => {
+            let latest_version = table.get_latest_version().await?;
+            Some(std::cmp::min(max_version, latest_version))
+        }
+        None => None,
     };
 
     table.update_incremental(max_version).await
