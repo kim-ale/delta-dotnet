@@ -262,6 +262,21 @@ namespace DeltaLake.Table
                     new ArgumentException("features cannot be empty", nameof(features)));
             }
 
+            foreach (TableFeature feature in features)
+            {
+                if (!Enum.IsDefined(typeof(TableFeature), feature))
+                {
+                    throw new ArgumentOutOfRangeException(nameof(features), feature, "Unknown table feature");
+                }
+
+                if (feature != TableFeature.V2Checkpoint)
+                {
+                    throw new NotSupportedException(
+                        $"Table feature '{feature}' is not supported by DeltaLake.Net. " +
+                        $"Only '{TableFeature.V2Checkpoint}' is currently supported.");
+                }
+            }
+
             await this.table
                 .AddTableFeaturesAsync(features, options, cancellationToken)
                 .ConfigureAwait(false);

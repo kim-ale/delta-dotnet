@@ -176,6 +176,29 @@ public class TableFeatureTests
         Assert.Equal(version, table.Version());
     }
 
+    [Fact]
+    public async Task AddTableFeaturesAsync_UnsupportedFeatures_ThrowWithoutCommit()
+    {
+        var data = await TableHelpers.SetupTable($"memory:///{Guid.NewGuid():N}", 1);
+        using var engine = data.engine;
+        using var table = data.table;
+        var version = table.Version();
+        var unsupportedFeatures = Enum.GetValues<TableFeature>()
+            .Where(feature => feature != TableFeature.V2Checkpoint);
+
+        foreach (var feature in unsupportedFeatures)
+        {
+            var exception = await Assert.ThrowsAsync<NotSupportedException>(
+                () => table.AddTableFeaturesAsync(
+                    [feature],
+                    new AddTableFeatureOptions { AllowProtocolVersionsIncrease = true },
+                    CancellationToken.None));
+
+            Assert.Contains(feature.ToString(), exception.Message);
+            Assert.Equal(version, table.Version());
+        }
+    }
+
     [Theory]
     [MemberData(nameof(TableFeatureMappings))]
     public void ConvertTableFeature_AllPublicValues_ReturnCanonicalName(

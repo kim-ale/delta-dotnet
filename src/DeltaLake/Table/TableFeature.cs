@@ -4,8 +4,9 @@ namespace DeltaLake.Table
     /// A table feature that can be added to a Delta table protocol.
     /// </summary>
     /// <remarks>
-    /// Adding a feature updates protocol support only. Features can require additional table
-    /// properties, schema changes, or other setup before their behavior is enabled.
+    /// Only <see cref="V2Checkpoint"/> is currently supported by
+    /// <see cref="Interfaces.ITable.AddTableFeaturesAsync(System.Collections.Generic.IReadOnlyCollection{TableFeature}, System.Threading.CancellationToken)"/>.
+    /// Other values are reserved for future delta-dotnet support and are rejected explicitly.
     /// </remarks>
     public enum TableFeature
     {
