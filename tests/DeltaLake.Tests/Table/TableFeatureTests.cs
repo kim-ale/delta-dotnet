@@ -6,6 +6,13 @@ namespace DeltaLake.Tests.Table;
 
 public class TableFeatureTests
 {
+    public static IEnumerable<object[]> LegacyWriterFeatures()
+    {
+        yield return [2, new[] { "appendOnly", "invariants", "v2Checkpoint" }];
+        yield return [3, new[] { "appendOnly", "checkConstraints", "invariants", "v2Checkpoint" }];
+        yield return [4, new[] { "appendOnly", "changeDataFeed", "checkConstraints", "generatedColumns", "invariants", "v2Checkpoint" }];
+    }
+
     public static IEnumerable<object[]> TableFeatureMappings()
     {
         yield return [TableFeature.ColumnMapping, "columnMapping"];
@@ -80,13 +87,52 @@ public class TableFeatureTests
             var protocolAction = ReadAction(commitPath, "protocol");
             Assert.Equal(
                 ["v2Checkpoint"],
-                protocolAction.GetProperty("readerFeatures").EnumerateArray().Select(value => value.GetString()));
+                ReadFeatureSet(protocolAction, "readerFeatures"));
             Assert.Equal(
-                ["v2Checkpoint"],
-                protocolAction.GetProperty("writerFeatures").EnumerateArray().Select(value => value.GetString()));
+                ["appendOnly", "invariants", "v2Checkpoint"],
+                ReadFeatureSet(protocolAction, "writerFeatures"));
 
             var commitInfo = ReadAction(commitPath, "commitInfo");
             Assert.Equal("add-table-features", commitInfo.GetProperty("workItem").GetString());
+        }
+        finally
+        {
+            info.Delete(true);
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(LegacyWriterFeatures))]
+    public async Task AddTableFeaturesAsync_LegacyProtocol_PreservesImpliedWriterFeatures(
+        int minWriterVersion,
+        string[] expectedWriterFeatures)
+    {
+        var info = DirectoryHelpers.CreateTempSubdirectory();
+        try
+        {
+            using var schemaBatch = TableHelpers.BuildBasicRecordBatch(0);
+            using var engine = new DeltaEngine(EngineOptions.Default);
+            using var table = await engine.CreateTableAsync(
+                new TableCreateOptions(DirectoryHelpers.ToFileUri(info.FullName), schemaBatch.Schema)
+                {
+                    Configuration = new Dictionary<string, string>
+                    {
+                        ["delta.minReaderVersion"] = "1",
+                        ["delta.minWriterVersion"] = minWriterVersion.ToString(),
+                    },
+                },
+                CancellationToken.None);
+
+            await table.AddTableFeaturesAsync(
+                [TableFeature.V2Checkpoint],
+                new AddTableFeatureOptions { AllowProtocolVersionsIncrease = true },
+                CancellationToken.None);
+
+            var protocolAction = ReadAction(
+                Path.Join(info.FullName, "_delta_log", "00000000000000000001.json"),
+                "protocol");
+            Assert.Equal(["v2Checkpoint"], ReadFeatureSet(protocolAction, "readerFeatures"));
+            Assert.Equal(expectedWriterFeatures, ReadFeatureSet(protocolAction, "writerFeatures"));
         }
         finally
         {
@@ -221,4 +267,12 @@ public class TableFeatureTests
 
         throw new InvalidOperationException($"Commit did not contain a {actionName} action.");
     }
+
+    private static string[] ReadFeatureSet(JsonElement protocolAction, string propertyName) =>
+        protocolAction
+            .GetProperty(propertyName)
+            .EnumerateArray()
+            .Select(value => value.GetString()!)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
 }

@@ -1659,6 +1659,22 @@ pub extern "C" fn table_add_features(
         rt,
         tbl,
         {
+            let mut features = features;
+            let protocol = match tbl.table.snapshot() {
+                Ok(snapshot) => snapshot.protocol(),
+                Err(error) => {
+                    unsafe {
+                        callback(DeltaTableError::from_error(rt, error).into_raw());
+                    }
+                    return;
+                }
+            };
+            add_legacy_protocol_features(
+                &mut features,
+                protocol.min_reader_version(),
+                protocol.min_writer_version(),
+            );
+
             let mut cmd = tbl
                 .table
                 .clone()
@@ -1686,6 +1702,36 @@ pub extern "C" fn table_add_features(
         },
         { callback(std::ptr::null()) }
     );
+}
+
+fn add_legacy_protocol_features(
+    features: &mut Vec<TableFeatures>,
+    min_reader_version: i32,
+    min_writer_version: i32,
+) {
+    let mut add = |feature| {
+        if !features.contains(&feature) {
+            features.push(feature);
+        }
+    };
+
+    if min_reader_version == 2 || (5..7).contains(&min_writer_version) {
+        add(TableFeatures::ColumnMapping);
+    }
+    if (2..7).contains(&min_writer_version) {
+        add(TableFeatures::AppendOnly);
+        add(TableFeatures::Invariants);
+    }
+    if (3..7).contains(&min_writer_version) {
+        add(TableFeatures::CheckConstraints);
+    }
+    if (4..7).contains(&min_writer_version) {
+        add(TableFeatures::ChangeDataFeed);
+        add(TableFeatures::GeneratedColumns);
+    }
+    if min_writer_version == 6 {
+        add(TableFeatures::IdentityColumns);
+    }
 }
 
 #[no_mangle]
