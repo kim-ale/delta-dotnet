@@ -546,7 +546,7 @@ namespace DeltaLake.Bridge
             AddTableFeatureOptions options,
             ICancellationToken cancellationToken)
         {
-            var featureNames = features
+            KeyValuePair<string, string?>[] featureNames = features
                 .Select(feature => new KeyValuePair<string, string?>(ConvertTableFeature(feature), null))
                 .ToArray();
             var tsc = new TaskCompletionSource<bool>();
@@ -559,9 +559,7 @@ namespace DeltaLake.Bridge
                         _ptr,
                         scope.OptionalDictionary(_runtime, featureNames),
                         BoolAsByte(options.AllowProtocolVersionsIncrease),
-                        options.CustomMetadata == null
-                            ? null
-                            : scope.Dictionary(_runtime, options.CustomMetadata),
+                        options.CustomMetadata == null ? null : scope.Dictionary(_runtime, options.CustomMetadata),
                         scope.CancellationToken(cancellationToken),
                         scope.FunctionPointer<Interop.TableEmptyCallback>((fail) =>
                         {
