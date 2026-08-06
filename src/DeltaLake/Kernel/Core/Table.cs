@@ -363,6 +363,83 @@ namespace DeltaLake.Kernel.Core
             }
         }
 
+        /// <inheritdoc/>
+        internal override async Task AddTableFeaturesAsync(
+            IReadOnlyCollection<TableFeature> features,
+            AddTableFeatureOptions options,
+            ICancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!this.isKernelAllocated)
+            {
+                throw new NotSupportedException(
+                    "AddTableFeaturesAsync requires a kernel-backed table. " +
+                    "memory:// tables and tables opened without kernel support cannot add table features. " +
+                    "Use a file:// URI with a temp directory for in-process scenarios.");
+            }
+
+            ulong committedVersion = await SyncToAsyncShim
+                .ExecuteAsync(
+                    () =>
+                    {
+                        unsafe
+                        {
+                            SharedSnapshot* postCommitSnapshot = null;
+                            try
+                            {
+                                ulong version = TableFeatureCommitter.Commit(
+                                    this.state.Snapshot(refresh: true),
+                                    this.kernelOwnedSharedExternEnginePtr,
+                                    features,
+                                    options.AllowProtocolVersionsIncrease,
+                                    options.CustomMetadata,
+                                    out postCommitSnapshot);
+
+                                try
+                                {
+                                    this.state.InstallSnapshot(postCommitSnapshot);
+                                }
+                                catch (Exception exception)
+                                {
+                                    throw new InvalidOperationException(
+                                        $"Table features were committed successfully at version {version}, " +
+                                        "but installing the durable post-commit snapshot in managed state failed. " +
+                                        "The commit was not rolled back; reload the table before continuing.",
+                                        exception);
+                                }
+                                postCommitSnapshot = null;
+                                return version;
+                            }
+                            finally
+                            {
+                                if (postCommitSnapshot != null)
+                                {
+                                    Methods.free_snapshot(postCommitSnapshot);
+                                }
+                            }
+                        }
+                    },
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            try
+            {
+                // The feature commit is already durable. Do not let cancellation of the public
+                // request interrupt synchronization of the inherited bridge view afterward.
+                await base.UpdateIncrementalAsync((long)committedVersion, ICancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                throw new InvalidOperationException(
+                    $"Table features were committed successfully at version {committedVersion}, " +
+                    "but synchronizing the inherited delta-rs table handle to that durable version failed. " +
+                    "The commit was not rolled back; reload the table before using bridge-backed operations.",
+                    exception);
+            }
+        }
+
         /// <remarks>
         /// Kernel does not support all Metadata - so we get what we can from
         /// delta-rs, and override with Kernel values when supported. The idea

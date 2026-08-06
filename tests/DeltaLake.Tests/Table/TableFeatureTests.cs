@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DeltaLake.Errors;
+using DeltaLake.Kernel.Callbacks.Errors;
 using DeltaLake.Table;
 
 namespace DeltaLake.Tests.Table;
@@ -8,27 +9,20 @@ public class TableFeatureTests
 {
     public static IEnumerable<object[]> LegacyWriterFeatures()
     {
-        yield return [2, new[] { "appendOnly", "invariants", "v2Checkpoint" }];
-        yield return [3, new[] { "appendOnly", "checkConstraints", "invariants", "v2Checkpoint" }];
-        yield return [4, new[] { "appendOnly", "changeDataFeed", "checkConstraints", "generatedColumns", "invariants", "v2Checkpoint" }];
+        yield return [1, 2, new[] { "v2Checkpoint" }, new[] { "appendOnly", "invariants", "v2Checkpoint" }];
+        yield return [1, 3, new[] { "v2Checkpoint" }, new[] { "appendOnly", "checkConstraints", "invariants", "v2Checkpoint" }];
+        yield return [1, 4, new[] { "v2Checkpoint" }, new[] { "appendOnly", "changeDataFeed", "checkConstraints", "generatedColumns", "invariants", "v2Checkpoint" }];
+        yield return [1, 5, new[] { "columnMapping", "v2Checkpoint" }, new[] { "appendOnly", "changeDataFeed", "checkConstraints", "columnMapping", "generatedColumns", "invariants", "v2Checkpoint" }];
+        yield return [1, 6, new[] { "columnMapping", "v2Checkpoint" }, new[] { "appendOnly", "changeDataFeed", "checkConstraints", "columnMapping", "generatedColumns", "identityColumns", "invariants", "v2Checkpoint" }];
+        yield return [2, 2, new[] { "columnMapping", "v2Checkpoint" }, new[] { "appendOnly", "columnMapping", "invariants", "v2Checkpoint" }];
     }
 
-    public static IEnumerable<object[]> TableFeatureMappings()
+    public static IEnumerable<object[]> BridgeMutationCases()
     {
-        yield return [TableFeature.ColumnMapping, "columnMapping"];
-        yield return [TableFeature.DeletionVectors, "deletionVectors"];
-        yield return [TableFeature.TimestampWithoutTimezone, "timestampNtz"];
-        yield return [TableFeature.V2Checkpoint, "v2Checkpoint"];
-        yield return [TableFeature.AppendOnly, "appendOnly"];
-        yield return [TableFeature.Invariants, "invariants"];
-        yield return [TableFeature.CheckConstraints, "checkConstraints"];
-        yield return [TableFeature.ChangeDataFeed, "changeDataFeed"];
-        yield return [TableFeature.GeneratedColumns, "generatedColumns"];
-        yield return [TableFeature.IdentityColumns, "identityColumns"];
-        yield return [TableFeature.RowTracking, "rowTracking"];
-        yield return [TableFeature.DomainMetadata, "domainMetadata"];
-        yield return [TableFeature.IcebergCompatV1, "icebergCompatV1"];
-        yield return [TableFeature.MaterializePartitionColumns, "materializePartitionColumns"];
+        yield return ["Insert"];
+        yield return ["Update"];
+        yield return ["Delete"];
+        yield return ["Merge"];
     }
 
     [Fact]
@@ -42,7 +36,7 @@ public class TableFeatureTests
             using var table = data.table;
             var version = table.Version();
 
-            var exception = await Assert.ThrowsAsync<DeltaRuntimeException>(
+            var exception = await Assert.ThrowsAsync<KernelException>(
                 () => table.AddTableFeaturesAsync(
                     [TableFeature.V2Checkpoint],
                     CancellationToken.None));
@@ -93,7 +87,12 @@ public class TableFeatureTests
                 ReadFeatureSet(protocolAction, "writerFeatures"));
 
             var commitInfo = ReadAction(commitPath, "commitInfo");
+            Assert.Equal("ADD FEATURE", commitInfo.GetProperty("operation").GetString());
+            Assert.True(commitInfo.TryGetProperty("kernelVersion", out _));
             Assert.Equal("add-table-features", commitInfo.GetProperty("workItem").GetString());
+            Assert.Equal(
+                ["commitInfo", "protocol"],
+                ReadActionNames(commitPath).OrderBy(name => name, StringComparer.Ordinal));
         }
         finally
         {
@@ -104,7 +103,9 @@ public class TableFeatureTests
     [Theory]
     [MemberData(nameof(LegacyWriterFeatures))]
     public async Task AddTableFeaturesAsync_LegacyProtocol_PreservesImpliedWriterFeatures(
+        int minReaderVersion,
         int minWriterVersion,
+        string[] expectedReaderFeatures,
         string[] expectedWriterFeatures)
     {
         var info = DirectoryHelpers.CreateTempSubdirectory();
@@ -117,7 +118,7 @@ public class TableFeatureTests
                 {
                     Configuration = new Dictionary<string, string>
                     {
-                        ["delta.minReaderVersion"] = "1",
+                        ["delta.minReaderVersion"] = minReaderVersion.ToString(),
                         ["delta.minWriterVersion"] = minWriterVersion.ToString(),
                     },
                 },
@@ -131,7 +132,7 @@ public class TableFeatureTests
             var protocolAction = ReadAction(
                 Path.Join(info.FullName, "_delta_log", "00000000000000000001.json"),
                 "protocol");
-            Assert.Equal(["v2Checkpoint"], ReadFeatureSet(protocolAction, "readerFeatures"));
+            Assert.Equal(expectedReaderFeatures, ReadFeatureSet(protocolAction, "readerFeatures"));
             Assert.Equal(expectedWriterFeatures, ReadFeatureSet(protocolAction, "writerFeatures"));
         }
         finally
@@ -163,6 +164,24 @@ public class TableFeatureTests
         {
             info.Delete(true);
         }
+    }
+
+    [Fact]
+    public async Task AddTableFeaturesAsync_ValidMemoryTable_ThrowsNotSupportedException()
+    {
+        var data = await TableHelpers.SetupTable($"memory:///{Guid.NewGuid():N}", 1);
+        using var engine = data.engine;
+        using var table = data.table;
+        var version = table.Version();
+
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(
+            () => table.AddTableFeaturesAsync(
+                [TableFeature.V2Checkpoint],
+                new AddTableFeatureOptions { AllowProtocolVersionsIncrease = true },
+                CancellationToken.None));
+
+        Assert.Contains("kernel-backed table", exception.Message);
+        Assert.Equal(version, table.Version());
     }
 
     [Fact]
@@ -246,12 +265,78 @@ public class TableFeatureTests
     }
 
     [Theory]
-    [MemberData(nameof(TableFeatureMappings))]
-    public void ConvertTableFeature_AllPublicValues_ReturnCanonicalName(
-        TableFeature feature,
-        string expected)
+    [MemberData(nameof(BridgeMutationCases))]
+    public async Task V2Checkpoint_BridgeMutation_RejectsWithoutCommit(string operation)
     {
-        Assert.Equal(expected, DeltaLake.Bridge.Table.ConvertTableFeature(feature));
+        var info = DirectoryHelpers.CreateTempSubdirectory();
+        try
+        {
+            var path = DirectoryHelpers.ToFileUri(info.FullName);
+            {
+                var data = await TableHelpers.SetupTable(path, 3);
+                using var engine = data.engine;
+                using var table = data.table;
+                await table.AddTableFeaturesAsync(
+                    [TableFeature.V2Checkpoint],
+                    new AddTableFeatureOptions { AllowProtocolVersionsIncrease = true },
+                    CancellationToken.None);
+            }
+
+            using var reopenedEngine = new DeltaEngine(EngineOptions.Default);
+            using var reopened = await reopenedEngine.LoadTableAsync(
+                new TableOptions { TableLocation = path },
+                CancellationToken.None);
+            var version = reopened.Version();
+
+            var exception = await Assert.ThrowsAsync<DeltaRuntimeException>(
+                () => InvokeBridgeMutationAsync(reopened, operation));
+
+            Assert.Contains("Unsupported table features", exception.Message);
+            Assert.Equal(version, reopened.Version());
+        }
+        finally
+        {
+            info.Delete(true);
+        }
+    }
+
+    private static async Task InvokeBridgeMutationAsync(
+        DeltaLake.Interfaces.ITable table,
+        string operation)
+    {
+        switch (operation)
+        {
+            case "Insert":
+                using (var batch = TableHelpers.BuildBasicRecordBatch(1))
+                {
+                    await table.InsertAsync(
+                        [batch],
+                        table.Schema(),
+                        new InsertOptions { SaveMode = SaveMode.Append },
+                        CancellationToken.None);
+                }
+                break;
+            case "Update":
+                await table.UpdateAsync(
+                    "UPDATE test SET test = test + CAST(1 AS INT)",
+                    CancellationToken.None);
+                break;
+            case "Delete":
+                await table.DeleteAsync("test = CAST(0 AS INT)", CancellationToken.None);
+                break;
+            case "Merge":
+                using (var batch = TableHelpers.BuildBasicRecordBatch(1))
+                {
+                    await table.MergeAsync(
+                        "MERGE INTO mytable USING newdata ON mytable.test = newdata.test WHEN MATCHED THEN DELETE",
+                        [batch],
+                        batch.Schema,
+                        CancellationToken.None);
+                }
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(operation), operation, null);
+        }
     }
 
     private static JsonElement ReadAction(string commitPath, string actionName)
@@ -266,6 +351,18 @@ public class TableFeatureTests
         }
 
         throw new InvalidOperationException($"Commit did not contain a {actionName} action.");
+    }
+
+    private static IEnumerable<string> ReadActionNames(string commitPath)
+    {
+        foreach (var line in File.ReadLines(commitPath))
+        {
+            using var document = JsonDocument.Parse(line);
+            foreach (var action in document.RootElement.EnumerateObject())
+            {
+                yield return action.Name;
+            }
+        }
     }
 
     private static string[] ReadFeatureSet(JsonElement protocolAction, string propertyName) =>

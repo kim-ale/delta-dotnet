@@ -28,6 +28,17 @@ namespace DeltaLake.Kernel.State
         public unsafe SharedSnapshot* Snapshot(bool refresh);
 
         /// <summary>
+        /// Installs a caller-owned snapshot as the managed point-in-time snapshot.
+        /// </summary>
+        /// <remarks>
+        /// Ownership transfers to this state. The caller must not free or reuse the handle after
+        /// this method returns successfully. Installing a snapshot clears any version pin and
+        /// invalidates all snapshot-dependent caches.
+        /// </remarks>
+        /// <param name="snapshot">The non-null, independently owned snapshot handle to install.</param>
+        public unsafe void InstallSnapshot(SharedSnapshot* snapshot);
+
+        /// <summary>
         /// Pins the lifetime snapshot to the specified table version. Subsequent calls to
         /// <see cref="Snapshot(bool)"/> rebuild against this pinned version rather than the
         /// latest log version. Used to mirror the bridge's pinned state after

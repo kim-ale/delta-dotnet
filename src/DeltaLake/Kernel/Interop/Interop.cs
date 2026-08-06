@@ -2057,6 +2057,13 @@ namespace DeltaLake.Kernel.Interop
         }
     }
 
+    internal partial struct FfiCommitInfoEntry
+    {
+        public KernelStringSlice key;
+
+        public KernelStringSlice value;
+    }
+
     internal enum ExternResultHandleExclusiveCreateTransaction_Tag
     {
         OkHandleExclusiveCreateTransaction,
@@ -2864,6 +2871,10 @@ namespace DeltaLake.Kernel.Interop
         [DllImport("delta_kernel_ffi", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         [return: NativeTypeName("struct ExternResultHandleExclusiveTransaction")]
         public static extern ExternResultHandleExclusiveTransaction transaction_with_committer([NativeTypeName("ffi::HandleSharedSnapshot")] SharedSnapshot* snapshot, [NativeTypeName("ffi::HandleSharedExternEngine")] SharedExternEngine* engine, [NativeTypeName("ffi::HandleMutableCommitter")] MutableCommitter* committer);
+
+        [DllImport("delta_kernel_ffi", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        [return: NativeTypeName("struct ExternResultHandleExclusiveCommittedTransaction")]
+        public static extern ExternResultHandleExclusiveCommittedTransaction add_table_features([NativeTypeName("ffi::HandleSharedSnapshot")] SharedSnapshot* snapshot, [NativeTypeName("ffi::HandleSharedExternEngine")] SharedExternEngine* engine, [NativeTypeName("const int *")] int* feature_codes, [NativeTypeName("uintptr_t")] ulong feature_count, bool allow_protocol_versions_increase, [NativeTypeName("const struct FfiCommitInfoEntry *")] FfiCommitInfoEntry* custom_metadata, [NativeTypeName("uintptr_t")] ulong custom_metadata_count);
 
         [DllImport("delta_kernel_ffi", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
         public static extern void free_transaction([NativeTypeName("ffi::HandleExclusiveTransaction")] ExclusiveTransaction* txn);

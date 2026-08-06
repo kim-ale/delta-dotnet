@@ -16,6 +16,14 @@ namespace ffi {
 #define AUTH_MAX_NUM_HEADERS 8
 #endif
 
+/**
+ * Integer feature code for the `v2Checkpoint` reader-writer table feature.
+ *
+ * Feature values cross the ABI as integers rather than Rust enum discriminants so callers can be
+ * validated before conversion.
+ */
+#define TABLE_FEATURE_V2_CHECKPOINT 0
+
 typedef enum KernelError {
   UnknownError = 0,
   FFIError = 1,
@@ -4106,6 +4114,16 @@ typedef struct ExternResultHandleExclusiveCommittedTransaction {
 } ExternResultHandleExclusiveCommittedTransaction;
 
 /**
+ * A borrowed custom CommitInfo string entry.
+ *
+ * The key and value are copied during [`add_table_features`] and are not retained after the call.
+ */
+typedef struct FfiCommitInfoEntry {
+  struct KernelStringSlice key;
+  struct KernelStringSlice value;
+} FfiCommitInfoEntry;
+
+/**
  * Represents an object that crosses the FFI boundary and which outlives the scope that created
  * it. It can be passed freely between rust code and external code. The
  *
@@ -6644,6 +6662,32 @@ struct ExternResultHandleExclusiveTransaction transaction(struct KernelStringSli
 struct ExternResultHandleExclusiveTransaction transaction_with_committer(HandleSharedSnapshot snapshot,
                                                                          HandleSharedExternEngine engine,
                                                                          HandleMutableCommitter committer);
+
+/**
+ * Add table features and commit the resulting Protocol-only ALTER transaction.
+ *
+ * The supplied snapshot is borrowed; the caller retains ownership. Feature codes and custom
+ * metadata are copied during the call. Currently only [`TABLE_FEATURE_V2_CHECKPOINT`] is
+ * accepted. The returned committed-transaction handle exposes the committed version and an
+ * independently owned post-commit snapshot through the existing accessors.
+ *
+ * A null feature or metadata pointer is accepted only when its corresponding count is zero.
+ * Custom metadata keys must be unique. Kernel-owned CommitInfo fields remain authoritative when
+ * custom metadata uses the same names.
+ *
+ * # Safety
+ *
+ * Caller is responsible for passing valid snapshot and engine handles. For each nonzero count,
+ * the corresponding pointer must reference that many contiguous values. Every metadata string
+ * must either have a valid UTF-8 buffer for its declared length or be null with length zero.
+ */
+struct ExternResultHandleExclusiveCommittedTransaction add_table_features(HandleSharedSnapshot snapshot,
+                                                                          HandleSharedExternEngine engine,
+                                                                          const int *feature_codes,
+                                                                          uintptr_t feature_count,
+                                                                          bool allow_protocol_versions_increase,
+                                                                          const struct FfiCommitInfoEntry *custom_metadata,
+                                                                          uintptr_t custom_metadata_count);
 
 /**
  * Free an existing-table transaction handle without committing.

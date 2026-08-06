@@ -14,7 +14,8 @@ namespace DeltaLake.Table
         /// <remarks>
         /// A protocol upgrade is irreversible and can make the table unreadable or unwritable by
         /// older clients. Adding <see cref="TableFeature.V2Checkpoint"/> to a classic table
-        /// requires this option to be <see langword="true"/>.
+        /// requires this option to be <see langword="true"/>. The current delta-rs-backed data
+        /// mutation operations cannot write to a table after this feature is enabled.
         /// </remarks>
         public bool AllowProtocolVersionsIncrease { get; init; }
 

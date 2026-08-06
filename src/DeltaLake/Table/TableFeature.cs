@@ -19,7 +19,10 @@ namespace DeltaLake.Table
         /// <summary>Timestamps without a time zone.</summary>
         TimestampWithoutTimezone,
 
-        /// <summary>V2 checkpoints, including checkpoint sidecars.</summary>
+        /// <summary>
+        /// V2 checkpoints, including checkpoint sidecars. Enabling this feature currently makes
+        /// delta-rs-backed data mutation operations unavailable for the table.
+        /// </summary>
         V2Checkpoint,
 
         /// <summary>Append-only table enforcement.</summary>

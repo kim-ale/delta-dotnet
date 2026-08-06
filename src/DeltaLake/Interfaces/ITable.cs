@@ -263,6 +263,12 @@ namespace DeltaLake.Interfaces
         /// <remarks>
         /// Adding a feature is an irreversible protocol change and can make the table incompatible
         /// with older clients. Only <see cref="TableFeature.V2Checkpoint"/> is currently supported.
+        /// After enabling <see cref="TableFeature.V2Checkpoint"/>, delta-rs-backed
+        /// <see cref="InsertAsync(IReadOnlyCollection{RecordBatch}, Schema, InsertOptions, CancellationToken)"/>,
+        /// <see cref="UpdateAsync(string, CancellationToken)"/>,
+        /// <see cref="DeleteAsync(string, CancellationToken)"/>, and
+        /// <see cref="MergeAsync(string, IReadOnlyCollection{RecordBatch}, Schema, CancellationToken)"/>
+        /// operations are not supported by the current native dependency.
         /// </remarks>
         /// <param name="features">The strongly typed table features to add.</param>
         /// <param name="cancellationToken">A <see cref="System.Threading.CancellationToken">cancellation token</see>.</param>
@@ -279,7 +285,9 @@ namespace DeltaLake.Interfaces
         /// Adding a feature is an irreversible protocol change and can make the table incompatible
         /// with older clients. Adding <see cref="TableFeature.V2Checkpoint"/> to a classic table
         /// requires <see cref="AddTableFeatureOptions.AllowProtocolVersionsIncrease"/> to be
-        /// <see langword="true"/>. Other table features are not currently supported.
+        /// <see langword="true"/>. Other table features are not currently supported. After
+        /// enabling <see cref="TableFeature.V2Checkpoint"/>, delta-rs-backed data mutation
+        /// operations are not supported by the current native dependency.
         /// </remarks>
         /// <param name="features">The strongly typed table features to add.</param>
         /// <param name="options">Options controlling protocol upgrades and commit metadata.</param>

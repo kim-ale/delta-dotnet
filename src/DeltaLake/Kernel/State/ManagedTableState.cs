@@ -69,6 +69,24 @@ namespace DeltaLake.Kernel.State
         }
 
         /// <inheritdoc/>
+        public unsafe void InstallSnapshot(SharedSnapshot* snapshot)
+        {
+            if (snapshot == null)
+            {
+                throw new ArgumentNullException(nameof(snapshot));
+            }
+
+            this.DisposePartitionList();
+            this.DisposeScan();
+            this.DisposeSchema();
+            this.DisposePhysicalSchema();
+            this.DisposeSnapshot();
+
+            this.managedPointInTimeSnapshot = snapshot;
+            this.pinnedVersion = null;
+        }
+
+        /// <inheritdoc/>
         public void PinSnapshotTo(long version)
         {
             if (this.pinnedVersion == version)
