@@ -66,7 +66,7 @@ namespace DeltaLake.Interfaces
         TableMetadata Metadata();
 
         /// <summary>
-        /// Returns minimum reader and writer versions.
+        /// Returns minimum reader and writer versions and explicit table features.
         /// </summary>
         /// <returns>A <see cref="DeltaLake.Table.ProtocolInfo"/>.</returns>
         ProtocolInfo ProtocolVersions();

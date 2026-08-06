@@ -41,6 +41,9 @@ namespace DeltaLake.Kernel.Core
     /// </summary>
     internal class Table : DeltaRustBridge.Table
     {
+        private static readonly unsafe VisitProtocolVersionsDelegate visitProtocolVersions = VisitProtocolVersions;
+        private static readonly unsafe VisitProtocolFeatureDelegate visitProtocolFeature = VisitProtocolFeature;
+
         /// <summary>
         /// Behavioral flags.
         /// </summary>
@@ -277,6 +280,60 @@ namespace DeltaLake.Kernel.Core
                 }
             }
             return base.Version();
+        }
+
+        internal override ProtocolInfo ProtocolVersions()
+        {
+            if (!this.isKernelAllocated)
+            {
+                return base.ProtocolVersions();
+            }
+
+            unsafe
+            {
+                SharedProtocol* protocol = null;
+                GCHandle contextHandle = default;
+                try
+                {
+                    protocol = Methods.snapshot_get_protocol(this.state.Snapshot(refresh: true));
+                    if (protocol == null)
+                    {
+                        throw new InvalidOperationException("Delta Kernel returned a null protocol handle.");
+                    }
+
+                    var context = new ProtocolVisitState();
+                    contextHandle = GCHandle.Alloc(context);
+                    Methods.visit_protocol(
+                        protocol,
+                        GCHandle.ToIntPtr(contextHandle).ToPointer(),
+                        Marshal.GetFunctionPointerForDelegate(visitProtocolVersions),
+                        Marshal.GetFunctionPointerForDelegate(visitProtocolFeature));
+
+                    if (context.Error is not null)
+                    {
+                        throw new InvalidOperationException(
+                            "Could not read protocol features from Delta Kernel.",
+                            context.Error);
+                    }
+
+                    return new ProtocolInfo(
+                        context.MinimumReaderVersion,
+                        context.MinimumWriterVersion,
+                        context.ReaderFeatures.AsReadOnly(),
+                        context.WriterFeatures.AsReadOnly());
+                }
+                finally
+                {
+                    if (contextHandle.IsAllocated)
+                    {
+                        contextHandle.Free();
+                    }
+                    if (protocol != null)
+                    {
+                        Methods.free_protocol(protocol);
+                    }
+                }
+            }
         }
 
         internal override string Uri()
@@ -612,6 +669,75 @@ namespace DeltaLake.Kernel.Core
                 }
 
                 return partitionColumns;
+            }
+        }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private unsafe delegate void VisitProtocolVersionsDelegate(
+            void* context,
+            int minimumReaderVersion,
+            int minimumWriterVersion);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private unsafe delegate void VisitProtocolFeatureDelegate(
+            void* context,
+            [MarshalAs(UnmanagedType.I1)] bool isReader,
+            KernelStringSlice feature);
+
+        private static unsafe void VisitProtocolVersions(
+            void* context,
+            int minimumReaderVersion,
+            int minimumWriterVersion)
+        {
+            var state = (ProtocolVisitState?)GCHandle.FromIntPtr((IntPtr)context).Target;
+            if (state is not null)
+            {
+                state.MinimumReaderVersion = minimumReaderVersion;
+                state.MinimumWriterVersion = minimumWriterVersion;
+            }
+        }
+
+        private static unsafe void VisitProtocolFeature(
+            void* context,
+            bool isReader,
+            KernelStringSlice feature)
+        {
+            var state = (ProtocolVisitState?)GCHandle.FromIntPtr((IntPtr)context).Target;
+            state?.AddFeature(isReader, feature);
+        }
+
+        private sealed class ProtocolVisitState
+        {
+            internal Exception? Error { get; private set; }
+
+            internal int MinimumReaderVersion { get; set; }
+
+            internal int MinimumWriterVersion { get; set; }
+
+            internal List<string> ReaderFeatures { get; } = new();
+
+            internal List<string> WriterFeatures { get; } = new();
+
+            internal unsafe void AddFeature(bool isReader, KernelStringSlice feature)
+            {
+                if (this.Error is not null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    string name = MarshalExtensions.PtrToStringUTF8(
+                        (IntPtr)feature.ptr,
+                        checked((int)feature.len))
+                        ?? throw new InvalidOperationException("Delta Kernel returned a null protocol feature name.");
+
+                    (isReader ? this.ReaderFeatures : this.WriterFeatures).Add(name);
+                }
+                catch (Exception exception)
+                {
+                    this.Error = exception;
+                }
             }
         }
 

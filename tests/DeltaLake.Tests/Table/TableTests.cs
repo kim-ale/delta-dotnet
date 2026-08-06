@@ -8,6 +8,13 @@ namespace DeltaLake.Tests.Table;
 
 public class DeltaTableTests
 {
+    public static IEnumerable<object[]> ProtocolFeatureVersions()
+    {
+        yield return [0UL, 1, 2, System.Array.Empty<string>(), System.Array.Empty<string>()];
+        yield return [1UL, 3, 7, System.Array.Empty<string>(), new[] { "appendOnly", "invariants" }];
+        yield return [2UL, 3, 7, new[] { "deletionVectors" }, new[] { "appendOnly", "deletionVectors", "invariants" }];
+    }
+
     [Fact]
     public async Task Create_InMemory_Test()
     {
@@ -45,6 +52,8 @@ public class DeltaTableTests
         var protocol = table.ProtocolVersions();
         Assert.True(protocol.MinimumReaderVersion > 0);
         Assert.True(protocol.MinimumWriterVersion > 0);
+        Assert.Empty(protocol.ReaderFeatures);
+        Assert.Empty(protocol.WriterFeatures);
     }
 
     [Fact]
@@ -128,6 +137,36 @@ public class DeltaTableTests
         using IEngine engine = new DeltaEngine(EngineOptions.Default);
         using var table = await engine.LoadTableAsync(new TableOptions() { TableLocation = location }, CancellationToken.None);
         Assert.Equal(4UL, table.Version());
+    }
+
+    [Theory]
+    [MemberData(nameof(ProtocolFeatureVersions))]
+    public async Task GivenExistingTable_WhenProtocolRead_ReturnsVersionedFeatures(
+        ulong version,
+        int minimumReaderVersion,
+        int minimumWriterVersion,
+        string[] readerFeatures,
+        string[] writerFeatures)
+    {
+        using IEngine engine = new DeltaEngine(EngineOptions.Default);
+        using ITable table = await engine.LoadTableAsync(
+            new TableOptions
+            {
+                TableLocation = TableIdentifier.TableWithDeletionLogs.TablePath(),
+                Version = version,
+            },
+            CancellationToken.None);
+
+        ProtocolInfo protocol = table.ProtocolVersions();
+
+        Assert.Equal(minimumReaderVersion, protocol.MinimumReaderVersion);
+        Assert.Equal(minimumWriterVersion, protocol.MinimumWriterVersion);
+        Assert.Equal(
+            readerFeatures,
+            protocol.ReaderFeatures.OrderBy(feature => feature, StringComparer.Ordinal));
+        Assert.Equal(
+            writerFeatures,
+            protocol.WriterFeatures.OrderBy(feature => feature, StringComparer.Ordinal));
     }
 
     [Fact]
