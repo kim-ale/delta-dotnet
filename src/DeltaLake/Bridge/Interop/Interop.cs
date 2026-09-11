@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 namespace DeltaLake.Bridge.Interop
 {
     [NativeTypeName("unsigned int")]
-    internal enum DeltaTableErrorCode : uint
+    public enum DeltaTableErrorCode : uint
     {
         Utf8 = 0,
         ObjectStore = 2,

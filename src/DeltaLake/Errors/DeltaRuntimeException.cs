@@ -32,6 +32,11 @@ namespace DeltaLake.Errors
         }
 
         /// <summary>
+        /// The strongly typed form of <see cref="DeltaLakeException.ErrorCode"/>.
+        /// </summary>
+        public Bridge.Interop.DeltaTableErrorCode Code => (Bridge.Interop.DeltaTableErrorCode)ErrorCode;
+
+        /// <summary>
         /// Consumes and frees the <see cref="Bridge.Interop.DeltaTableError"/>
         /// </summary>
         /// <param name="runtime">Pointer to the unmanaged runtime</param>

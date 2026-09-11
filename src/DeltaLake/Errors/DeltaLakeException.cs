@@ -34,6 +34,13 @@ namespace DeltaLake.Errors
         /// <summary>
         /// A unique error code coming from the delta lake runtime
         /// </summary>
+        /// <remarks>
+        /// Only <see cref="DeltaRuntimeException"/> carries a runtime error code. Other derived types
+        /// use a sentinel outside that code space, so this value must not be cast to
+        /// <see cref="Bridge.Interop.DeltaTableErrorCode"/> unless the exception is a
+        /// <see cref="DeltaRuntimeException"/>, which already exposes it typed as
+        /// <see cref="DeltaRuntimeException.Code"/>.
+        /// </remarks>
         public int ErrorCode { get; }
     }
 }

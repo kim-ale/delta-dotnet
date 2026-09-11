@@ -5,6 +5,11 @@ namespace DeltaLake.Errors
     /// <summary>
     /// Represents a configuration error detected before interacting with the runtime
     /// </summary>
+    /// <remarks>
+    /// This is raised by client side argument validation, before any call into the runtime, so its
+    /// inherited <see cref="DeltaLakeException.ErrorCode"/> is a sentinel rather than a runtime error
+    /// code. Catch this type to detect a caller error; do not classify it by code.
+    /// </remarks>
     public class DeltaConfigurationException : DeltaLakeException
     {
 

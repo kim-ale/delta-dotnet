@@ -23,6 +23,17 @@ namespace DeltaLake.Kernel.Callbacks.Errors
         ///  Initializes a new instance of the KernelException class.
         /// </summary>
         /// <param name="message">The message that describes the error</param>
+        /// <param name="errorCode">The kernel error code that describes the error</param>
+        public KernelException(string? message, KernelError errorCode) : base(message)
+        {
+            ErrorCode = errorCode;
+            KernelMessage = message ?? string.Empty;
+        }
+
+        /// <summary>
+        ///  Initializes a new instance of the KernelException class.
+        /// </summary>
+        /// <param name="message">The message that describes the error</param>
         /// <param name="source">The error that caused this exception</param>
         internal unsafe KernelException(string? message, KernelReadError* source) : base(message)
         {
