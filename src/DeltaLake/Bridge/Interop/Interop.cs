@@ -1,43 +1,9 @@
+using DeltaLake.Errors;
 using System;
 using System.Runtime.InteropServices;
 
 namespace DeltaLake.Bridge.Interop
 {
-    [NativeTypeName("unsigned int")]
-    public enum DeltaTableErrorCode : uint
-    {
-        Utf8 = 0,
-        ObjectStore = 2,
-        Parquet = 3,
-        Arrow = 4,
-        InvalidJsonLog = 5,
-        InvalidStatsJson = 6,
-        InvalidVersion = 8,
-        InvalidDateTimeString = 10,
-        InvalidData = 11,
-        NotATable = 12,
-        NoSchema = 14,
-        SchemaMismatch = 16,
-        PartitionError = 17,
-        InvalidPartitionFilter = 18,
-        Io = 20,
-        Transaction = 21,
-        VersionAlreadyExists = 22,
-        VersionMismatch = 23,
-        MissingFeature = 24,
-        InvalidTableLocation = 25,
-        SerializeLogJson = 26,
-        Generic = 28,
-        GenericError = 29,
-        Kernel = 30,
-        MetaDataError = 31,
-        NotInitialized = 32,
-        OperationCanceled = 33,
-        DataFusion = 34,
-        SqlParser = 35,
-        InvalidTimestamp = 36,
-    }
-
     [NativeTypeName("unsigned int")]
     internal enum PartitionFilterBinaryOp : uint
     {

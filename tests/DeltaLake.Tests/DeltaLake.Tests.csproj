@@ -31,5 +31,7 @@
     </ItemGroup>
     <ItemGroup>
         <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+        <EmbeddedResource Include="../../src/DeltaLake/Bridge/include/delta-lake-bridge.h"
+            LogicalName="delta-lake-bridge.h" />
     </ItemGroup>
 </Project>

@@ -3,8 +3,10 @@ compatible-codegen
 unix-types
 --with-access-specifier
 *=internal
---with-access-specifier
-DeltaTableErrorCode=public
+--exclude
+DeltaTableErrorCode
+--with-using
+DeltaTableError=DeltaLake.Errors
 --file
 src/DeltaLake/Bridge/include/delta-lake-bridge.h
 --namespace

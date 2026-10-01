@@ -24,7 +24,11 @@ namespace DeltaLake.Kernel.Callbacks.Errors
         /// </summary>
         /// <param name="message">The message that describes the error</param>
         /// <param name="errorCode">The kernel error code that describes the error</param>
-        public KernelException(string? message, KernelError errorCode) : base(message)
+        /// <remarks>
+        /// Only the kernel raises this exception, so this constructor exists for derived test doubles
+        /// rather than for callers to report kernel failures of their own.
+        /// </remarks>
+        protected KernelException(string? message, KernelError errorCode) : base(message)
         {
             ErrorCode = errorCode;
             KernelMessage = message ?? string.Empty;
