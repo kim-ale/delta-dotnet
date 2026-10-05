@@ -1,0 +1,15 @@
+language = "C"
+include_guard = "DELTA_DOTNET_KERNEL_CREDENTIALS_H"
+includes = ["delta_kernel_ffi.h"]
+usize_is_size_t = true
+documentation = true
+
+[parse]
+parse_deps = false
+
+[export]
+include = ["KernelCredentialRequestV1", "KernelCredentialResultV1", "KernelCredentialRegistrationV1", "KernelCredentialOptionV1", "KernelCredentialBegin", "KernelCredentialCancel", "KernelCredentialReleased"]
+exclude = ["Header", "CredentialEngineResult"]
+
+[export.rename]
+"CredentialEngineResult" = "ExternResultHandleSharedExternEngine"

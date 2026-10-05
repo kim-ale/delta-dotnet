@@ -12,14 +12,17 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using DeltaLake.Bridge.Interop;
+using DeltaLake.Credentials;
 using DeltaLake.Extensions;
 using DeltaLake.Kernel.Arrow.Builders;
 using DeltaLake.Kernel.Arrow.Extensions;
 using DeltaLake.Kernel.Callbacks.Allocators;
 using DeltaLake.Kernel.Callbacks.Errors;
+using DeltaLake.Kernel.Credentials;
 using DeltaLake.Kernel.Interop;
 using DeltaLake.Kernel.Shim.Async;
 using DeltaLake.Kernel.State;
@@ -39,8 +42,16 @@ namespace DeltaLake.Kernel.Core
     /// operations not supported by the FFI yet falls back to Delta RS Runtime
     /// implementation.
     /// </summary>
+    /// <remarks>
+    /// Kernel operations on a single table must remain serialized. Credential lifetime
+    /// admission defers resource cleanup; it does not synchronize mutable kernel state.
+    /// </remarks>
     internal class Table : DeltaRustBridge.Table
     {
+        private static readonly IDisposable NoopKernelOperation = new NoopKernelOperationLease();
+        private readonly KernelLifetimeOwner? kernelLifetimeOwner;
+        private int closing;
+
         /// <summary>
         /// Behavioral flags.
         /// </summary>
@@ -113,9 +124,17 @@ namespace DeltaLake.Kernel.Core
         )
             : this(bridgeRuntime, rawBridgetablePtr, options, options.IsKernelSupported())
         {
-            if (this.isKernelAllocated && options.Version is ulong pinVersion)
+            try
             {
-                this.state.PinSnapshotTo((long)pinVersion);
+                if (this.isKernelAllocated && options.Version is ulong pinVersion)
+                {
+                    this.state.PinSnapshotTo((long)pinVersion);
+                }
+            }
+            catch
+            {
+                if (this.kernelLifetimeOwner != null) this.Dispose();
+                throw;
             }
         }
 
@@ -137,6 +156,33 @@ namespace DeltaLake.Kernel.Core
             this.tableStorageOptions = tableStorageOptions;
             bool shouldBuildKernel = useKernel && tableStorageOptions.IsKernelSupported();
 
+            if (tableStorageOptions.KernelAzureBearerCredential is KernelAzureBearerCredentialOptions credential)
+            {
+                try
+                {
+                    if (!shouldBuildKernel)
+                    {
+                        throw new InvalidOperationException("Kernel bearer credentials require a kernel-readable table.");
+                    }
+
+                    var resources = CredentialKernelResources.Create(tableStorageOptions, credential);
+                    this.kernelLifetimeOwner = resources.Owner;
+                    this.tableLocationHandle = resources.TableLocationHandle;
+                    this.gcPinnedTableLocationPtr = (byte*)resources.TableLocationHandle.AddrOfPinnedObject();
+                    this.tableLocationSlice = resources.TableLocationSlice;
+                    this.kernelOwnedSharedExternEnginePtr = resources.Engine;
+                    this.state = resources.State!;
+                    this.addFilesNativeSchema = resources.NativeSchema;
+                    this.isKernelAllocated = true;
+                }
+                catch
+                {
+                    this.Dispose();
+                    throw;
+                }
+                return;
+            }
+
             if (shouldBuildKernel)
             {
                 // Kernel String Slice is used to communicate the table location.
@@ -153,7 +199,9 @@ namespace DeltaLake.Kernel.Core
                 this.allocatorHandle = handleForAllocator;
                 if (engineBuilder.tag != ExternResultEngineBuilder_Tag.OkEngineBuilder)
                 {
-                    throw new InvalidOperationException("Could not initiate engine builder from Delta Kernel");
+                    throw KernelException.FromEngineError(
+                        engineBuilder.Anonymous.Anonymous2.err,
+                        "Could not initiate engine builder from Delta Kernel");
                 }
                 this.kernelOwnedEngineBuilderPtr = engineBuilder.Anonymous.Anonymous1.ok;
 
@@ -193,7 +241,9 @@ namespace DeltaLake.Kernel.Core
                 this.sharedExternEngine = Methods.builder_build(this.kernelOwnedEngineBuilderPtr);
                 if (this.sharedExternEngine.tag != ExternResultHandleSharedExternEngine_Tag.OkHandleSharedExternEngine)
                 {
-                    throw new InvalidOperationException("Could not build engine from the engine builder sent to Delta Kernel.");
+                    throw KernelException.FromEngineError(
+                        this.sharedExternEngine.Anonymous.Anonymous2.err,
+                        "Could not build engine from the engine builder sent to Delta Kernel.");
                 }
                 this.kernelOwnedSharedExternEnginePtr = this.sharedExternEngine.Anonymous.Anonymous1.ok;
                 this.state = new ManagedTableState(this.tableLocationSlice, this.kernelOwnedSharedExternEnginePtr);
@@ -213,6 +263,7 @@ namespace DeltaLake.Kernel.Core
         )
         {
             this.ThrowIfKernelNotSupported();
+            using var lease = this.EnterKernelOperation();
 
             return await SyncToAsyncShim
                 .ExecuteAsync(
@@ -240,6 +291,7 @@ namespace DeltaLake.Kernel.Core
         internal async Task<OwnedDataFrame> ReadAsDataFrameAsync(ICancellationToken cancellationToken)
         {
             this.ThrowIfKernelNotSupported();
+            using var lease = this.EnterKernelOperation();
 
             return await SyncToAsyncShim
                 .ExecuteAsync(
@@ -271,6 +323,7 @@ namespace DeltaLake.Kernel.Core
         {
             if (this.isKernelAllocated)
             {
+                using var lease = this.EnterKernelOperation();
                 unsafe
                 {
                     return unchecked((long)Methods.version(this.state.Snapshot(true)));
@@ -283,6 +336,7 @@ namespace DeltaLake.Kernel.Core
         {
             if (this.isKernelAllocated)
             {
+                using var lease = this.EnterKernelOperation();
                 unsafe
                 {
                     IntPtr tableRootPtr = IntPtr.Zero;
@@ -311,6 +365,9 @@ namespace DeltaLake.Kernel.Core
                     "Use a file:// URI with a temp directory for in-process scenarios.");
             }
 
+            using var bridgeLease = this.kernelLifetimeOwner != null ? new SafeHandleLease(this) : null;
+            using var runtimeLease = this.kernelLifetimeOwner != null ? new SafeHandleLease(this._runtime) : null;
+            using var lease = this.isKernelAllocated ? this.EnterKernelOperation() : null;
             await base.LoadVersionAsync(version, cancellationToken).ConfigureAwait(false);
 
             if (this.isKernelAllocated)
@@ -333,6 +390,9 @@ namespace DeltaLake.Kernel.Core
                     "Use a file:// URI with a temp directory for in-process scenarios.");
             }
 
+            using var bridgeLease = this.kernelLifetimeOwner != null ? new SafeHandleLease(this) : null;
+            using var runtimeLease = this.kernelLifetimeOwner != null ? new SafeHandleLease(this._runtime) : null;
+            using var lease = this.isKernelAllocated ? this.EnterKernelOperation() : null;
             await base.LoadTimestampAsync(timestampMilliseconds, cancellationToken).ConfigureAwait(false);
 
             if (this.isKernelAllocated)
@@ -351,6 +411,9 @@ namespace DeltaLake.Kernel.Core
         /// </remarks>
         internal override async Task UpdateIncrementalAsync(long? maxVersion, ICancellationToken cancellationToken)
         {
+            using var bridgeLease = this.kernelLifetimeOwner != null ? new SafeHandleLease(this) : null;
+            using var runtimeLease = this.kernelLifetimeOwner != null ? new SafeHandleLease(this._runtime) : null;
+            using var lease = this.isKernelAllocated ? this.EnterKernelOperation() : null;
             await base.UpdateIncrementalAsync(maxVersion, cancellationToken).ConfigureAwait(false);
 
             if (this.isKernelAllocated)
@@ -371,6 +434,7 @@ namespace DeltaLake.Kernel.Core
         /// </remarks>
         internal override DeltaLake.Table.TableMetadata Metadata()
         {
+            using var lease = this.isKernelAllocated ? this.EnterKernelOperation() : null;
             DeltaLake.Table.TableMetadata metadata = base.Metadata();
             if (this.isKernelAllocated)
             {
@@ -404,6 +468,7 @@ namespace DeltaLake.Kernel.Core
             ICancellationToken cancellationToken)
         {
             this.ThrowIfKernelNotSupported();
+            using var lease = this.EnterKernelOperation();
 
             using Apache.Arrow.RecordBatch addFilesBatch = AddActionRecordBatchBuilder.Build(actions);
 
@@ -439,6 +504,7 @@ namespace DeltaLake.Kernel.Core
             ICancellationToken cancellationToken)
         {
             this.ThrowIfKernelNotSupported();
+            using var lease = this.EnterKernelOperation();
 
             return await SyncToAsyncShim
                 .ExecuteAsync(
@@ -467,6 +533,7 @@ namespace DeltaLake.Kernel.Core
                     "Use a file:// URI with a temp directory for in-process scenarios.");
             }
 
+            using var lease = this.EnterKernelOperation();
             await SyncToAsyncShim
                 .ExecuteAsync(
                     () =>
@@ -496,8 +563,27 @@ namespace DeltaLake.Kernel.Core
 
         #region SafeHandle implementation
 
+        protected override void Dispose(bool disposing)
+        {
+            System.Threading.Interlocked.Exchange(ref this.closing, 1);
+            base.Dispose(disposing);
+        }
+
         protected override unsafe bool ReleaseHandle()
         {
+            if (this.kernelLifetimeOwner != null)
+            {
+                try
+                {
+                    this.kernelLifetimeOwner.Close();
+                }
+                finally
+                {
+                    base.ReleaseHandle();
+                }
+                return true;
+            }
+
             if (this.isKernelAllocated)
             {
                 this.state.Dispose();
@@ -553,53 +639,78 @@ namespace DeltaLake.Kernel.Core
         {
             unsafe
             {
-                ExternResultHandleExclusiveTableChanges changesResult = options.EndVersion.HasValue
-                    ? Methods.table_changes_between_versions(
-                        this.tableLocationSlice,
-                        this.kernelOwnedSharedExternEnginePtr,
-                        options.StartVersion,
-                        options.EndVersion.Value)
-                    : Methods.table_changes_from_version(
-                        this.tableLocationSlice,
-                        this.kernelOwnedSharedExternEnginePtr,
-                        options.StartVersion);
-
-                if (changesResult.tag != ExternResultHandleExclusiveTableChanges_Tag.OkHandleExclusiveTableChanges)
+                var lease = this.EnterKernelOperation();
+                SharedTableChangesScan* scanPtr = null;
+                SharedScanTableChangesIterator* iterPtr = null;
+                try
                 {
-                    throw KernelException.FromEngineError(
-                        changesResult.Anonymous.Anonymous2.err,
-                        "Failed to acquire table changes handle from Delta Kernel.");
+                    ExternResultHandleExclusiveTableChanges changesResult = options.EndVersion.HasValue
+                        ? Methods.table_changes_between_versions(
+                            this.tableLocationSlice,
+                            this.kernelOwnedSharedExternEnginePtr,
+                            options.StartVersion,
+                            options.EndVersion.Value)
+                        : Methods.table_changes_from_version(
+                            this.tableLocationSlice,
+                            this.kernelOwnedSharedExternEnginePtr,
+                            options.StartVersion);
+
+                    if (changesResult.tag != ExternResultHandleExclusiveTableChanges_Tag.OkHandleExclusiveTableChanges)
+                    {
+                        throw KernelException.FromEngineError(
+                            changesResult.Anonymous.Anonymous2.err,
+                            "Failed to acquire table changes handle from Delta Kernel.");
+                    }
+
+                    // CRITICAL: table_changes_scan CONSUMES this pointer on both success and failure.
+                    ExclusiveTableChanges* tableChangesPtr = changesResult.Anonymous.Anonymous1.ok;
+
+                    // TODO: expose predicate push-down via TableChangesOptions once EnginePredicate* is surfaced.
+                    ExternResultHandleSharedTableChangesScan scanResult =
+                        Methods.table_changes_scan(tableChangesPtr, this.kernelOwnedSharedExternEnginePtr, predicate: null);
+                    tableChangesPtr = null;  // now invalid regardless of outcome
+
+                    if (scanResult.tag != ExternResultHandleSharedTableChangesScan_Tag.OkHandleSharedTableChangesScan)
+                    {
+                        throw KernelException.FromEngineError(
+                            scanResult.Anonymous.Anonymous2.err,
+                            "Failed to create table changes scan from Delta Kernel.");
+                    }
+
+                    scanPtr = scanResult.Anonymous.Anonymous1.ok;
+
+                    ExternResultHandleSharedScanTableChangesIterator iterResult =
+                        Methods.table_changes_scan_execute(scanPtr, this.kernelOwnedSharedExternEnginePtr);
+
+                    if (iterResult.tag != ExternResultHandleSharedScanTableChangesIterator_Tag.OkHandleSharedScanTableChangesIterator)
+                    {
+                        throw KernelException.FromEngineError(
+                            iterResult.Anonymous.Anonymous2.err,
+                            "Failed to execute table changes scan from Delta Kernel.");
+                    }
+
+                    iterPtr = iterResult.Anonymous.Anonymous1.ok;
+                    return new TableChangesContext(scanPtr, iterPtr, lease);
                 }
-
-                // CRITICAL: table_changes_scan CONSUMES this pointer on both success and failure.
-                ExclusiveTableChanges* tableChangesPtr = changesResult.Anonymous.Anonymous1.ok;
-
-                // TODO: expose predicate push-down via TableChangesOptions once EnginePredicate* is surfaced.
-                ExternResultHandleSharedTableChangesScan scanResult =
-                    Methods.table_changes_scan(tableChangesPtr, this.kernelOwnedSharedExternEnginePtr, predicate: null);
-                tableChangesPtr = null;  // now invalid regardless of outcome
-
-                if (scanResult.tag != ExternResultHandleSharedTableChangesScan_Tag.OkHandleSharedTableChangesScan)
+                catch
                 {
-                    throw KernelException.FromEngineError(
-                        scanResult.Anonymous.Anonymous2.err,
-                        "Failed to create table changes scan from Delta Kernel.");
+                    try
+                    {
+                        if (iterPtr != null) Methods.free_scan_table_changes_iter(iterPtr);
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            if (scanPtr != null) Methods.free_table_changes_scan(scanPtr);
+                        }
+                        finally
+                        {
+                            lease.Dispose();
+                        }
+                    }
+                    throw;
                 }
-
-                SharedTableChangesScan* scanPtr = scanResult.Anonymous.Anonymous1.ok;
-
-                ExternResultHandleSharedScanTableChangesIterator iterResult =
-                    Methods.table_changes_scan_execute(scanPtr, this.kernelOwnedSharedExternEnginePtr);
-
-                if (iterResult.tag != ExternResultHandleSharedScanTableChangesIterator_Tag.OkHandleSharedScanTableChangesIterator)
-                {
-                    Methods.free_table_changes_scan(scanPtr);
-                    throw KernelException.FromEngineError(
-                        iterResult.Anonymous.Anonymous2.err,
-                        "Failed to execute table changes scan from Delta Kernel.");
-                }
-
-                return new TableChangesContext(scanPtr, iterResult.Anonymous.Anonymous1.ok);
             }
         }
 
@@ -621,15 +732,18 @@ namespace DeltaLake.Kernel.Core
         // Methods have safe signatures so they are callable from the non-unsafe iterator above.
         private sealed unsafe class TableChangesContext : IDisposable
         {
+            private readonly IDisposable lease;
             private SharedTableChangesScan* scanPtr;
             private SharedScanTableChangesIterator* iterPtr;
 
             internal TableChangesContext(
                 SharedTableChangesScan* scanPtr,
-                SharedScanTableChangesIterator* iterPtr)
+                SharedScanTableChangesIterator* iterPtr,
+                IDisposable lease)
             {
                 this.scanPtr = scanPtr;
                 this.iterPtr = iterPtr;
+                this.lease = lease;
             }
 
             internal Apache.Arrow.RecordBatch? Next()
@@ -670,18 +784,140 @@ namespace DeltaLake.Kernel.Core
 
             public void Dispose()
             {
-                // Free iterator before scan (reverse acquisition order).
-                if (this.iterPtr != null)
+                try
                 {
-                    Methods.free_scan_table_changes_iter(this.iterPtr);
-                    this.iterPtr = null;
+                    if (this.iterPtr != null)
+                    {
+                        Methods.free_scan_table_changes_iter(this.iterPtr);
+                        this.iterPtr = null;
+                    }
                 }
-                if (this.scanPtr != null)
+                finally
                 {
-                    Methods.free_table_changes_scan(this.scanPtr);
-                    this.scanPtr = null;
+                    try
+                    {
+                        if (this.scanPtr != null)
+                        {
+                            Methods.free_table_changes_scan(this.scanPtr);
+                            this.scanPtr = null;
+                        }
+                    }
+                    finally
+                    {
+                        this.lease.Dispose();
+                        GC.SuppressFinalize(this);
+                    }
                 }
             }
+
+            ~TableChangesContext()
+            {
+                if (this.lease != NoopKernelOperation) Dispose();
+            }
+        }
+
+        [SuppressMessage("Design", "CA1001", Justification = "KernelLifetimeOwner.Close retires these resources and disposes the state and registration after the last operation lease; exposing IDisposable could release resources still in use.")]
+        private sealed unsafe class CredentialKernelResources
+        {
+            private KernelCredentialRegistration? registration;
+
+            internal GCHandle TableLocationHandle;
+            internal KernelStringSlice TableLocationSlice;
+            internal SharedExternEngine* Engine;
+            internal ManagedTableState? State;
+            internal Apache.Arrow.C.CArrowSchema* NativeSchema;
+            internal KernelLifetimeOwner Owner { get; }
+
+            private CredentialKernelResources()
+            {
+                this.Owner = new KernelLifetimeOwner(this.Dispose);
+            }
+
+            internal static CredentialKernelResources Create(
+                TableStorageOptions options,
+                KernelAzureBearerCredentialOptions credential)
+            {
+                var resources = new CredentialKernelResources();
+                try
+                {
+                    (GCHandle handle, IntPtr ptr) = options.TableLocation.ToPinnedBytePointer();
+                    resources.TableLocationHandle = handle;
+                    resources.TableLocationSlice = new KernelStringSlice
+                    {
+                        ptr = (sbyte*)ptr,
+                        len = (ulong)System.Text.Encoding.UTF8.GetByteCount(options.TableLocation),
+                    };
+                    resources.registration = KernelCredentialRegistration.Create(credential);
+                    resources.Engine = resources.registration.CreateEngine(options.TableLocation, options.StorageOptions);
+                    resources.NativeSchema = Apache.Arrow.C.CArrowSchema.Create();
+                    Apache.Arrow.C.CArrowSchemaExporter.ExportSchema(
+                        AddActionRecordBatchBuilder.AddFilesSchema, resources.NativeSchema);
+                    resources.State = new ManagedTableState(resources.TableLocationSlice, resources.Engine);
+                    return resources;
+                }
+                catch
+                {
+                    resources.Owner.Close();
+                    throw;
+                }
+            }
+
+            private void Dispose()
+            {
+                try
+                {
+                    this.State?.Dispose();
+                    this.State = null;
+                }
+                finally
+                {
+                    try
+                    {
+                        if (this.NativeSchema != null)
+                        {
+                            Apache.Arrow.C.CArrowSchema.Free(this.NativeSchema);
+                            this.NativeSchema = null;
+                        }
+                    }
+                    finally
+                    {
+                        try
+                        {
+                            if (this.TableLocationHandle.IsAllocated) this.TableLocationHandle.Free();
+                        }
+                        finally
+                        {
+                            try
+                            {
+                                if (this.Engine != null)
+                                {
+                                    Methods.free_engine(this.Engine);
+                                    this.Engine = null;
+                                }
+                            }
+                            finally
+                            {
+                                this.registration?.Dispose();
+                                this.registration = null;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        [SuppressMessage("Maintainability", "CA1513", Justification = "Explicit disposal guards preserve net472 compatibility; ObjectDisposedException.ThrowIf is unavailable on that target.")]
+        private IDisposable EnterKernelOperation()
+        {
+            if (this.kernelLifetimeOwner == null) return NoopKernelOperation;
+            if (System.Threading.Volatile.Read(ref this.closing) != 0 || this.IsClosed)
+                throw new ObjectDisposedException(nameof(Table));
+            return this.kernelLifetimeOwner.EnterOperation();
+        }
+
+        private sealed class NoopKernelOperationLease : IDisposable
+        {
+            public void Dispose() { }
         }
 
         private void ThrowIfKernelNotSupported()

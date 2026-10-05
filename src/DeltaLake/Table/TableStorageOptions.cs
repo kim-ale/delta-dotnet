@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using DeltaLake.Credentials;
 
 namespace DeltaLake.Table
 {
@@ -11,6 +12,15 @@ namespace DeltaLake.Table
         /// A map of string options
         /// </summary>
         public Dictionary<string, string> StorageOptions { get; init; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// Gets optional refreshable Azure bearer credentials for kernel operations only.
+        /// </summary>
+        /// <remarks>
+        /// Bridge load/create uses a private static bootstrap token and bridge operations
+        /// do not refresh it. The SDK does not dispose the caller-owned credential provider.
+        /// </remarks>
+        public KernelAzureBearerCredentialOptions? KernelAzureBearerCredential { get; init; }
 
         /// <summary>
         /// Location of the delta table

@@ -48,14 +48,13 @@
     <!-- DEBUG Rust Build -->
 
     <Target Name="CargoBridgeBuildDebug" BeforeTargets="DispatchToInnerBuilds;PreBuildEvent"
-        Condition="'$(Configuration)' == 'Debug'">
-        <Exec Command="cargo build" WorkingDirectory="Bridge" />
+        Condition="'$(Configuration)' == 'Debug' AND '$(SkipNativeBuild)' != 'true'">
+        <Exec Command="cargo build --target-dir target" WorkingDirectory="Bridge" />
     </Target>
 
     <Target Name="CargoKernelBuildDebug" BeforeTargets="DispatchToInnerBuilds;PreBuildEvent"
-        Condition="'$(Configuration)' == 'Debug'">
-        <Exec Command="cargo build --no-default-features --features default-engine-rustls,arrow-58"
-        WorkingDirectory="Kernel/delta-kernel-rs/ffi" />
+        Condition="'$(Configuration)' == 'Debug' AND '$(SkipNativeBuild)' != 'true'">
+        <Exec Command="cargo build --locked --target-dir target" WorkingDirectory="Kernel/NativeHost" />
     </Target>
 
     <!-- DEBUG binary copy -->
@@ -74,7 +73,7 @@
     <Target Name="CopyKernelDLLDebug" BeforeTargets="PreBuildEvent"
         Condition="'$(Configuration)' == 'Debug'">
         <ItemGroup Condition="'$(Configuration)' == 'Debug'">
-            <Content Include="Kernel/delta-kernel-rs/target/debug/$(KernelLibraryFile)">
+            <Content Include="Kernel/NativeHost/target/debug/$([System.String]::Copy('$(KernelLibraryFile)').Replace('delta_kernel_ffi', 'delta_dotnet_kernel'))">
                 <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
                 <Link>$(KernelLibraryFile)</Link>
                 <PublishState>Included</PublishState>
@@ -85,14 +84,13 @@
     <!-- RELEASE Rust Build -->
 
     <Target Name="CargoBridgeBuildRelease" BeforeTargets="DispatchToInnerBuilds;PreBuildEvent"
-        Condition="'$(Configuration)' == 'Release' AND '$(RustLibraryRoot)' == ''">
-        <Exec Command="cargo build --release" WorkingDirectory="Bridge" />
+        Condition="'$(Configuration)' == 'Release' AND '$(RustLibraryRoot)' == '' AND '$(SkipNativeBuild)' != 'true'">
+        <Exec Command="cargo build --release --target-dir target" WorkingDirectory="Bridge" />
     </Target>
 
     <Target Name="CargoKernelBuildRelease" BeforeTargets="DispatchToInnerBuilds;PreBuildEvent"
-        Condition="'$(Configuration)' == 'Release' AND '$(KernelLibraryRoot)' == ''">
-        <Exec Command="cargo build --release --no-default-features --features default-engine-rustls,arrow-58"
-         WorkingDirectory="Kernel/delta-kernel-rs/ffi" />
+        Condition="'$(Configuration)' == 'Release' AND '$(KernelLibraryRoot)' == '' AND '$(SkipNativeBuild)' != 'true'">
+        <Exec Command="cargo build --locked --release --target-dir target" WorkingDirectory="Kernel/NativeHost" />
     </Target>
 
     <!-- RELEASE binary copy -->
@@ -112,7 +110,7 @@
         Condition="'$(Configuration)' == 'Release' AND '$(KernelLibraryRoot)' == ''">
         <ItemGroup Condition="'$(Configuration)' == 'Release'">
             <!--  See note above on not using 'release' binary -->
-            <Content Include="Kernel/delta-kernel-rs/target/release/$(KernelLibraryFile)">
+            <Content Include="Kernel/NativeHost/target/release/$([System.String]::Copy('$(KernelLibraryFile)').Replace('delta_kernel_ffi', 'delta_dotnet_kernel'))">
                 <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
                 <Link>$(KernelLibraryFile)</Link>
                 <PublishState>Included</PublishState>

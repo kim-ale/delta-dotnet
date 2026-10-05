@@ -31,5 +31,7 @@
     </ItemGroup>
     <ItemGroup>
         <Content Include="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+        <EmbeddedResource Include="../../src/DeltaLake/Kernel/include/delta_dotnet_kernel_credentials.h"
+            LogicalName="DeltaLake.Tests.Kernel.delta_dotnet_kernel_credentials.h" />
     </ItemGroup>
 </Project>

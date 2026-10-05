@@ -343,38 +343,6 @@ namespace DeltaLake.Kernel.Interop
         Errbool,
     }
 
-    internal unsafe partial struct ExternResultbool
-    {
-        [NativeTypeName("ffi::ExternResultbool_Tag")]
-        public ExternResultbool_Tag tag;
-
-        [NativeTypeName("__AnonymousRecord_delta_kernel_ffi_L479_C3")]
-        public _Anonymous_e__Union Anonymous;
-
-        [StructLayout(LayoutKind.Explicit)]
-        internal unsafe partial struct _Anonymous_e__Union
-        {
-            [FieldOffset(0)]
-            [NativeTypeName("__AnonymousRecord_delta_kernel_ffi_L480_C5")]
-            public _Anonymous1_e__Struct Anonymous1;
-
-            [FieldOffset(0)]
-            [NativeTypeName("__AnonymousRecord_delta_kernel_ffi_L483_C5")]
-            public _Anonymous2_e__Struct Anonymous2;
-
-            internal partial struct _Anonymous1_e__Struct
-            {
-                public bool ok;
-            }
-
-            internal unsafe partial struct _Anonymous2_e__Struct
-            {
-                [NativeTypeName("struct EngineError *")]
-                public EngineError* err;
-            }
-        }
-    }
-
     internal enum ExternResultHandleSharedExternEngine_Tag
     {
         OkHandleSharedExternEngine,
@@ -1719,14 +1687,6 @@ namespace DeltaLake.Kernel.Interop
     {
         [NativeTypeName("uint64_t")]
         public ulong num_records;
-    }
-
-    internal unsafe partial struct CDvInfo
-    {
-        [NativeTypeName("const struct DvInfo *")]
-        public DvInfo* info;
-
-        public bool has_vector;
     }
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]

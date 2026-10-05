@@ -10,8 +10,12 @@
 // -----------------------------------------------------------------------------
 
 using System;
+using System.Diagnostics.CodeAnalysis;
+using System.Threading;
 using System.Threading.Tasks;
 using DeltaLake.Bridge.Interop;
+using DeltaLake.Kernel.Credentials;
+using DeltaLake.Kernel.State;
 using DeltaLake.Table;
 using DeltaRustBridge = DeltaLake.Bridge;
 
@@ -26,6 +30,8 @@ namespace DeltaLake.Kernel.Core
     /// </summary>
     internal class Runtime : DeltaRustBridge.Runtime
     {
+        private int closing;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="Runtime"/> class.
         /// </summary>
@@ -43,6 +49,24 @@ namespace DeltaLake.Kernel.Core
             System.Threading.CancellationToken cancellationToken
         )
         {
+            var credential = options.KernelAzureBearerCredential;
+            if (credential != null)
+            {
+                ThrowIfClosing();
+                using var runtimeLease = new SafeHandleLease(this);
+                var snapshot = KernelCredentialBootstrap.Snapshot(options) with { KernelAzureBearerCredential = credential };
+                KernelCredentialRegistration.EnsureSupported();
+                KernelCredentialBootstrap.ValidateStorage(snapshot);
+                var token = await KernelCredentialBootstrap.AcquireAsync(credential, cancellationToken).ConfigureAwait(false);
+                ThrowIfClosing();
+                var bridgeOptions = KernelCredentialBootstrap.WithToken(snapshot, token);
+                IntPtr providerTablePtr = await base.LoadTablePtrAsync(bridgeOptions, cancellationToken).ConfigureAwait(false);
+                unsafe
+                {
+                    return new Table(this, (RawDeltaTable*)providerTablePtr, snapshot);
+                }
+            }
+
             IntPtr tablePtr = await base.LoadTablePtrAsync(options, cancellationToken).ConfigureAwait(false);
             unsafe
             {
@@ -60,11 +84,41 @@ namespace DeltaLake.Kernel.Core
             System.Threading.CancellationToken cancellationToken
         )
         {
+            var credential = options.KernelAzureBearerCredential;
+            if (credential != null)
+            {
+                ThrowIfClosing();
+                using var runtimeLease = new SafeHandleLease(this);
+                var snapshot = KernelCredentialBootstrap.Snapshot(options) with { KernelAzureBearerCredential = credential };
+                KernelCredentialRegistration.EnsureSupported();
+                KernelCredentialBootstrap.ValidateStorage(snapshot);
+                var token = await KernelCredentialBootstrap.AcquireAsync(credential, cancellationToken).ConfigureAwait(false);
+                ThrowIfClosing();
+                var bridgeOptions = KernelCredentialBootstrap.WithToken(snapshot, token);
+                IntPtr providerTablePtr = await base.CreateTablePtrAsync(bridgeOptions, cancellationToken).ConfigureAwait(false);
+                unsafe
+                {
+                    return new Table(this, (RawDeltaTable*)providerTablePtr, snapshot);
+                }
+            }
+
             IntPtr tablePtr = await base.CreateTablePtrAsync(options, cancellationToken).ConfigureAwait(false);
             unsafe
             {
                 return new Table(this, (RawDeltaTable*)tablePtr, options);
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            Interlocked.Exchange(ref closing, 1);
+            base.Dispose(disposing);
+        }
+
+        [SuppressMessage("Maintainability", "CA1513", Justification = "Explicit disposal guards preserve net472 compatibility; ObjectDisposedException.ThrowIf is unavailable on that target.")]
+        private void ThrowIfClosing()
+        {
+            if (Volatile.Read(ref closing) != 0) throw new ObjectDisposedException(nameof(Runtime));
         }
     }
 }

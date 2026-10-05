@@ -1,0 +1,29 @@
+[package]
+name = "delta_dotnet_kernel"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kernel_ffi = { package = "delta_kernel_ffi", path = "../delta-kernel-rs/ffi", default-features = false, features = ["default-engine-rustls", "arrow-58", "internal-api"] }
+delta_kernel = { path = "../delta-kernel-rs/kernel", default-features = false, features = ["default-engine-rustls", "arrow-58", "internal-api"] }
+object_store = { version = "=0.13.2", default-features = false }
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync", "time", "rt-multi-thread", "macros", "net", "io-util"] }
+futures = "0.3"
+thiserror = "2"
+url = "2"
+
+[build-dependencies]
+cbindgen = "0.29.2"
+
+[dev-dependencies]
+wiremock = "0.6"
+
+[profile.release]
+panic = "unwind"
+
+[workspace]

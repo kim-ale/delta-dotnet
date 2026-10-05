@@ -104,7 +104,9 @@ namespace DeltaLake.Bridge
                     {
                         if (cancellationToken.IsCancellationRequested)
                         {
-                            _ = Task.Run(() => tsc.TrySetCanceled(cancellationToken)); ;
+                            if (success != null) Interop.Methods.table_free(success);
+                            if (fail != null) Interop.Methods.error_free(Ptr, fail);
+                            _ = Task.Run(() => tsc.TrySetCanceled(cancellationToken));
                             return;
                         }
 
@@ -158,7 +160,9 @@ namespace DeltaLake.Bridge
                             {
                                 if (cancellationToken.IsCancellationRequested)
                                 {
-                                    _ = Task.Run(() => tsc.TrySetCanceled(cancellationToken)); ;
+                                    if (success != null) Interop.Methods.table_free(success);
+                                    if (fail != null) Interop.Methods.error_free(Ptr, fail);
+                                    _ = Task.Run(() => tsc.TrySetCanceled(cancellationToken));
                                     return;
                                 }
 

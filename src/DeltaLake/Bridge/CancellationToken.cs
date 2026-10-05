@@ -72,8 +72,6 @@ namespace DeltaLake.Bridge
 
         protected override void Dispose(bool disposing)
         {
-            base.Dispose(disposing);
-
             if (disposing)
             {
                 foreach (var registration in _cancellationRegistrations)
@@ -81,6 +79,8 @@ namespace DeltaLake.Bridge
                     registration.Dispose();
                 }
             }
+
+            base.Dispose(disposing);
         }
     }
 }

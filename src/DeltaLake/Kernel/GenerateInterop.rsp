@@ -10,6 +10,10 @@ unix-types
 *=internal
 --with-access-specifier
 KernelError=public
+--exclude
+ExternResultbool
+--exclude
+CDvInfo
 --file
 src/DeltaLake/Kernel/include/delta_kernel_ffi.h
 --namespace
