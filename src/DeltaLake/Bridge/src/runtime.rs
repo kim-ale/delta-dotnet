@@ -13,13 +13,26 @@ use crate::DynamicArray;
 use crate::Map;
 use crate::runtime_options::RuntimeOptions;
 
+#[derive(Clone)]
 pub struct Runtime {
-    runtime: tokio::runtime::Runtime,
+    state: Arc<RuntimeState>,
+}
+
+struct RuntimeState {
+    runtime: Option<tokio::runtime::Runtime>,
 
     data_fusion_execution_batch_size: Option<usize>,
     data_fusion_runtime_max_spill_size: Option<usize>,
     data_fusion_runtime_temp_directory: Option<String>,
     data_fusion_runtime_max_temp_directory_size: Option<u64>,
+}
+
+impl Drop for RuntimeState {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
+    }
 }
 
 /// If fail is not null, it must be manually freed when done. Runtime is always
@@ -45,7 +58,7 @@ pub extern "C" fn runtime_new(options: *const RuntimeOptions) -> RuntimeOrFail {
         Err(err) => {
             // We have to make an empty runtime just for the failure to be
             // freeable
-            let mut runtime = Runtime::default();
+            let runtime = Runtime::default();
             let fail = runtime.alloc_utf8(&format!("Invalid options: {}", err));
             RuntimeOrFail {
                 runtime: Box::into_raw(Box::new(runtime)),
@@ -58,8 +71,7 @@ pub extern "C" fn runtime_new(options: *const RuntimeOptions) -> RuntimeOrFail {
 #[no_mangle]
 pub extern "C" fn runtime_free(runtime: *mut Runtime) {
     unsafe {
-        let rt = Box::from_raw(runtime);
-        rt.runtime.shutdown_background();
+        drop(Box::from_raw(runtime));
     }
 }
 
@@ -78,7 +90,7 @@ pub extern "C" fn byte_array_free(runtime: *mut Runtime, bytes: *const ByteArray
     unsafe { (*bytes).data = std::ptr::null_mut() };
     // Return only if runtime is non-null
     if !runtime.is_null() {
-        let runtime = unsafe { &mut *runtime };
+        let runtime = unsafe { &*runtime };
         runtime.return_buf(vec);
     }
     unsafe {
@@ -135,22 +147,24 @@ impl Runtime {
             .enable_all()
             .build()
             .map(|rt| Runtime {
-                runtime: rt,
-                data_fusion_execution_batch_size: none_when_zero(options.data_fusion_execution_batch_size),
-                data_fusion_runtime_max_spill_size: none_when_zero(options.data_fusion_runtime_max_spill_size),
-                data_fusion_runtime_temp_directory: options.data_fusion_runtime_temp_directory.to_option_string(),
-                data_fusion_runtime_max_temp_directory_size: none_when_zero(options.data_fusion_runtime_max_temp_directory_size).map(|v| v as u64),
+                state: Arc::new(RuntimeState {
+                    runtime: Some(rt),
+                    data_fusion_execution_batch_size: none_when_zero(options.data_fusion_execution_batch_size),
+                    data_fusion_runtime_max_spill_size: none_when_zero(options.data_fusion_runtime_max_spill_size),
+                    data_fusion_runtime_temp_directory: options.data_fusion_runtime_temp_directory.to_option_string(),
+                    data_fusion_runtime_max_temp_directory_size: none_when_zero(options.data_fusion_runtime_max_temp_directory_size).map(|v| v as u64),
+                }),
             })
     }
 
     pub(crate) fn create_session_context(&self, max_spill_size: Option<usize>) -> Result<SessionContext, DataFusionError> {
         let memory_pool = max_spill_size
-            .or(self.data_fusion_runtime_max_spill_size)
+            .or(self.state.data_fusion_runtime_max_spill_size)
             .map(|size| TrackConsumersPool::new(FairSpillPool::new(size), 10.try_into().unwrap()));
 
         let disk_manager_builder = DiskManagerBuilder::default()
-            .chain_if_some(self.data_fusion_runtime_max_temp_directory_size, |b, size| b.with_max_temp_directory_size(size))
-            .chain_if_some(self.data_fusion_runtime_temp_directory.clone(), |b, path| b.with_mode(DiskManagerMode::Directories(vec![path.into()])));
+            .chain_if_some(self.state.data_fusion_runtime_max_temp_directory_size, |b, size| b.with_max_temp_directory_size(size))
+            .chain_if_some(self.state.data_fusion_runtime_temp_directory.clone(), |b, path| b.with_mode(DiskManagerMode::Directories(vec![path.into()])));
 
         let runtime_env = RuntimeEnvBuilder::default()
             .with_disk_manager_builder(disk_manager_builder)
@@ -158,7 +172,7 @@ impl Runtime {
             .build_arc()?;
 
         let config = SessionConfig::from(DeltaSessionConfig::default())
-            .chain_if_some(self.data_fusion_execution_batch_size, |c, batch_size| {
+            .chain_if_some(self.state.data_fusion_execution_batch_size, |c, batch_size| {
                 c.with_batch_size(batch_size)
             })
 
@@ -178,18 +192,18 @@ impl Runtime {
         Ok(SessionContext::new_with_state(state))
     }
 
-    pub fn borrow_buf(&mut self) -> Vec<u8> {
+    pub fn borrow_buf(&self) -> Vec<u8> {
         // We currently do not use a thread-safe byte pool, but if wanted, it
         // can be added here
         Vec::new()
     }
 
-    pub fn return_buf(&mut self, _vec: Vec<u8>) {
+    pub fn return_buf(&self, _vec: Vec<u8>) {
         // We currently do not use a thread-safe byte pool, but if wanted, it
         // can be added here
     }
 
-    pub fn alloc_utf8(&mut self, v: &str) -> ByteArray {
+    pub fn alloc_utf8(&self, v: &str) -> ByteArray {
         let mut buf = self.borrow_buf();
         buf.clear();
         buf.extend_from_slice(v.as_bytes());
@@ -204,18 +218,20 @@ impl Runtime {
     }
 
     pub fn handle(&self) -> tokio::runtime::Handle {
-        self.runtime.handle().clone()
+        self.state.runtime.as_ref().expect("runtime state is initialized").handle().clone()
     }
 }
 
 impl Default for Runtime {
     fn default() -> Self {
         Runtime {
-            runtime: tokio::runtime::Builder::new_multi_thread().build().unwrap(),
-            data_fusion_execution_batch_size: None,
-            data_fusion_runtime_max_spill_size: None,
-            data_fusion_runtime_temp_directory: None,
-            data_fusion_runtime_max_temp_directory_size: None,
+            state: Arc::new(RuntimeState {
+                runtime: Some(tokio::runtime::Builder::new_multi_thread().build().unwrap()),
+                data_fusion_execution_batch_size: None,
+                data_fusion_runtime_max_spill_size: None,
+                data_fusion_runtime_temp_directory: None,
+                data_fusion_runtime_max_temp_directory_size: None,
+            }),
         }
     }
 }

@@ -13,9 +13,11 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading.Tasks;
 using DeltaLake.Bridge.Interop;
 using DeltaLake.Extensions;
+using DeltaLake.Http;
 using DeltaLake.Kernel.Arrow.Builders;
 using DeltaLake.Kernel.Arrow.Extensions;
 using DeltaLake.Kernel.Callbacks.Allocators;
@@ -41,6 +43,8 @@ namespace DeltaLake.Kernel.Core
     /// </summary>
     internal class Table : DeltaRustBridge.Table
     {
+        private static readonly unsafe AllocateErrorFn AllocateError = AllocateErrorCallbacks.AllocateError;
+        private static readonly unsafe IntPtr AllocateErrorPointer = Marshal.GetFunctionPointerForDelegate(AllocateError);
         /// <summary>
         /// Behavioral flags.
         /// </summary>
@@ -66,7 +70,7 @@ namespace DeltaLake.Kernel.Core
         /// It is our responsibility to dispose of these alongside this <see cref="Table"/> class.
         /// </remarks>
 #pragma warning disable IDE0090, CA1859, CA2213 // state is disposed of in ReleaseHandle but the IDE does not recognize it as IDisposable
-        private readonly ISafeState state;
+        private readonly ISafeState state = null!;
 #pragma warning restore IDE0090, CA1859, CA2213
 
         /// <summary>
@@ -81,9 +85,8 @@ namespace DeltaLake.Kernel.Core
         private readonly unsafe byte** gcPinnedStorageOptionsValuePtrs;
 
         private readonly GCHandle tableLocationHandle;
-        private readonly GCHandle[] storageOptionsKeyHandles;
-        private readonly GCHandle[] storageOptionsValueHandles;
-        private readonly GCHandle? allocatorHandle;
+        private readonly GCHandle[] storageOptionsKeyHandles = Array.Empty<GCHandle>();
+        private readonly GCHandle[] storageOptionsValueHandles = Array.Empty<GCHandle>();
         private readonly unsafe Apache.Arrow.C.CArrowSchema* addFilesNativeSchema;
         /// <summary>
         /// Pointers **KERNEL** manages related to this <see cref="Table"/> class.
@@ -92,7 +95,6 @@ namespace DeltaLake.Kernel.Core
         /// It is our responsibility to ask Kernel to release these pointers
         /// when <see cref="Table"/> class is disposed.
         /// </remarks>
-        private readonly unsafe EngineBuilder* kernelOwnedEngineBuilderPtr;
         private readonly unsafe SharedExternEngine* kernelOwnedSharedExternEnginePtr;
 
         /// <summary>
@@ -113,10 +115,14 @@ namespace DeltaLake.Kernel.Core
         )
             : this(bridgeRuntime, rawBridgetablePtr, options, options.IsKernelSupported())
         {
-            if (this.isKernelAllocated && options.Version is ulong pinVersion)
+            try
             {
-                this.state.PinSnapshotTo((long)pinVersion);
+                if (this.isKernelAllocated && options.Version is ulong pinVersion)
+                {
+                    this.state.PinSnapshotTo((long)pinVersion);
+                }
             }
+            catch { Dispose(); throw; }
         }
 
         /// <summary>
@@ -136,31 +142,19 @@ namespace DeltaLake.Kernel.Core
         {
             this.tableStorageOptions = tableStorageOptions;
             bool shouldBuildKernel = useKernel && tableStorageOptions.IsKernelSupported();
-
-            if (shouldBuildKernel)
+            try
             {
-                // Kernel String Slice is used to communicate the table location.
-                //
-                (GCHandle handle, IntPtr ptr) = tableStorageOptions.TableLocation.ToPinnedBytePointer();
-                this.tableLocationHandle = handle;
-                this.gcPinnedTableLocationPtr = (byte*)ptr.ToPointer();
-                this.tableLocationSlice = new KernelStringSlice { ptr = (sbyte*)this.gcPinnedTableLocationPtr, len = (ulong)tableStorageOptions.TableLocation.Length };
+                StorageOptionsSnapshot.Validate(tableStorageOptions);
+                if (!shouldBuildKernel) return;
 
-                // Shared engine is the core runtime at the Kernel, tied to this table,
-                // it is managed by the Kernel, but our responsibility to release it.
-                var handleForAllocator = GCHandle.Alloc((AllocateErrorFn)AllocateErrorCallbacks.AllocateError);
-                ExternResultEngineBuilder engineBuilder = Methods.get_engine_builder(this.tableLocationSlice, Marshal.GetFunctionPointerForDelegate(handleForAllocator.Target!));
-                this.allocatorHandle = handleForAllocator;
-                if (engineBuilder.tag != ExternResultEngineBuilder_Tag.OkEngineBuilder)
+                (GCHandle locationHandle, IntPtr locationPtr) = tableStorageOptions.TableLocation.ToPinnedBytePointer();
+                this.tableLocationHandle = locationHandle;
+                this.gcPinnedTableLocationPtr = (byte*)locationPtr.ToPointer();
+                this.tableLocationSlice = new KernelStringSlice
                 {
-                    throw new InvalidOperationException("Could not initiate engine builder from Delta Kernel");
-                }
-                this.kernelOwnedEngineBuilderPtr = engineBuilder.Anonymous.Anonymous1.ok;
-
-                // The joys of unmanaged code, this is all to pass some Key:Value string pairs
-                // to the Kernel's Engine Builder (e.g. Storage Account/S3 Keys etc.).
-                //
-                int index = 0;
+                    ptr = (sbyte*)this.gcPinnedTableLocationPtr,
+                    len = (ulong)Encoding.UTF8.GetByteCount(tableStorageOptions.TableLocation)
+                };
                 int count = tableStorageOptions.StorageOptions.Count;
                 this.storageOptionsKeyHandles = new GCHandle[count];
                 this.storageOptionsValueHandles = new GCHandle[count];
@@ -168,32 +162,69 @@ namespace DeltaLake.Kernel.Core
                 this.gcPinnedStorageOptionsValuePtrs = (byte**)Marshal.AllocHGlobal(count * sizeof(byte*));
                 this.storageOptionsKeySlices = new KernelStringSlice[count];
                 this.storageOptionsValueSlices = new KernelStringSlice[count];
-
+                int index = 0;
                 foreach (KeyValuePair<string, string> kvp in tableStorageOptions.StorageOptions)
                 {
                     (GCHandle keyHandle, IntPtr keyPtr) = kvp.Key.ToPinnedBytePointer();
-                    (GCHandle valueHandle, IntPtr valuePtr) = kvp.Value.ToPinnedBytePointer();
-
                     this.storageOptionsKeyHandles[index] = keyHandle;
+                    (GCHandle valueHandle, IntPtr valuePtr) = kvp.Value.ToPinnedBytePointer();
                     this.storageOptionsValueHandles[index] = valueHandle;
                     this.gcPinnedStorageOptionsKeyPtrs[index] = (byte*)keyPtr.ToPointer();
                     this.gcPinnedStorageOptionsValuePtrs[index] = (byte*)valuePtr.ToPointer();
-                    this.storageOptionsKeySlices[index] = new KernelStringSlice { ptr = (sbyte*)this.gcPinnedStorageOptionsKeyPtrs[index], len = (ulong)kvp.Key.Length };
-                    this.storageOptionsValueSlices[index] = new KernelStringSlice { ptr = (sbyte*)this.gcPinnedStorageOptionsValuePtrs[index], len = (ulong)kvp.Value.Length };
-
-                    Methods.set_builder_option(this.kernelOwnedEngineBuilderPtr, this.storageOptionsKeySlices[index], this.storageOptionsValueSlices[index]);
-
+                    this.storageOptionsKeySlices[index] = new KernelStringSlice { ptr = (sbyte*)keyPtr, len = (ulong)Encoding.UTF8.GetByteCount(kvp.Key) };
+                    this.storageOptionsValueSlices[index] = new KernelStringSlice { ptr = (sbyte*)valuePtr, len = (ulong)Encoding.UTF8.GetByteCount(kvp.Value) };
                     index++;
                 }
 
-                // Required by Snapshot::checkpoint to avoid deadlocks on the default
-                // single-threaded TokioBackgroundExecutor.
-                Methods.set_builder_with_multithreaded_executor(this.kernelOwnedEngineBuilderPtr, 2, 0);
-
-                this.sharedExternEngine = Methods.builder_build(this.kernelOwnedEngineBuilderPtr);
+                using var registration = tableStorageOptions.RequestHeaderProvider == null ? null :
+                    HeaderDispatcher.Register(NativeHeaderModule.Kernel, tableStorageOptions.RequestHeaderProvider);
+                if (registration != null)
+                {
+                    fixed (KernelStringSlice* keys = this.storageOptionsKeySlices)
+                    fixed (KernelStringSlice* values = this.storageOptionsValueSlices)
+                    {
+                        this.sharedExternEngine = NativeMethods.kernel_engine_with_headers(this.tableLocationSlice,
+                            keys, values, new UIntPtr((uint)count), registration.Context, AllocateErrorPointer);
+                    }
+                }
+                else
+                {
+                    var engineBuilder = Methods.get_engine_builder(this.tableLocationSlice, AllocateErrorPointer);
+                    if (engineBuilder.tag != ExternResultEngineBuilder_Tag.OkEngineBuilder)
+                    {
+                        throw KernelException.FromEngineError(engineBuilder.Anonymous.Anonymous2.err,
+                            "Could not initiate engine builder from Delta Kernel.");
+                    }
+                    var builder = engineBuilder.Anonymous.Anonymous1.ok;
+                    try
+                    {
+                        for (index = 0; index < count; index++)
+                        {
+                            var result = BooleanResultMethods.SetBuilderOption(builder, this.storageOptionsKeySlices[index], this.storageOptionsValueSlices[index]);
+                            if (result.tag != ExternResultbool_Tag.Okbool)
+                            {
+                                throw KernelException.FromEngineError(result.Anonymous.Anonymous2.err, "Could not configure Delta Kernel engine.");
+                            }
+                        }
+                        Methods.set_builder_with_multithreaded_executor(builder, 2, 0);
+                        this.sharedExternEngine = Methods.builder_build(builder);
+                        builder = null;
+                    }
+                    finally
+                    {
+                        if (builder != null)
+                        {
+                            var retired = Methods.builder_build(builder);
+                            if (retired.tag == ExternResultHandleSharedExternEngine_Tag.OkHandleSharedExternEngine)
+                                Methods.free_engine(retired.Anonymous.Anonymous1.ok);
+                            else KernelException.FromEngineError(retired.Anonymous.Anonymous2.err, null);
+                        }
+                    }
+                }
                 if (this.sharedExternEngine.tag != ExternResultHandleSharedExternEngine_Tag.OkHandleSharedExternEngine)
                 {
-                    throw new InvalidOperationException("Could not build engine from the engine builder sent to Delta Kernel.");
+                    throw KernelException.FromEngineError(this.sharedExternEngine.Anonymous.Anonymous2.err,
+                        "Could not build Delta Kernel engine.");
                 }
                 this.kernelOwnedSharedExternEnginePtr = this.sharedExternEngine.Anonymous.Anonymous1.ok;
                 this.state = new ManagedTableState(this.tableLocationSlice, this.kernelOwnedSharedExternEnginePtr);
@@ -204,6 +235,7 @@ namespace DeltaLake.Kernel.Core
                 Apache.Arrow.C.CArrowSchemaExporter.ExportSchema(
                     AddActionRecordBatchBuilder.AddFilesSchema, this.addFilesNativeSchema);
             }
+                    catch { Dispose(); throw; }
         }
 
         #region Delta Kernel table operations
@@ -213,6 +245,7 @@ namespace DeltaLake.Kernel.Core
         )
         {
             this.ThrowIfKernelNotSupported();
+            using var operation = new SafeHandleLease(this);
 
             return await SyncToAsyncShim
                 .ExecuteAsync(
@@ -240,6 +273,7 @@ namespace DeltaLake.Kernel.Core
         internal async Task<OwnedDataFrame> ReadAsDataFrameAsync(ICancellationToken cancellationToken)
         {
             this.ThrowIfKernelNotSupported();
+            using var operation = new SafeHandleLease(this);
 
             return await SyncToAsyncShim
                 .ExecuteAsync(
@@ -269,6 +303,7 @@ namespace DeltaLake.Kernel.Core
 
         internal override long? Version()
         {
+            using var operation = new SafeHandleLease(this);
             if (this.isKernelAllocated)
             {
                 unsafe
@@ -276,11 +311,12 @@ namespace DeltaLake.Kernel.Core
                     return unchecked((long)Methods.version(this.state.Snapshot(true)));
                 }
             }
-            return base.Version();
+            return VersionWhileLeased();
         }
 
         internal override string Uri()
         {
+            using var operation = new SafeHandleLease(this);
             if (this.isKernelAllocated)
             {
                 unsafe
@@ -304,6 +340,7 @@ namespace DeltaLake.Kernel.Core
 
         internal override async Task LoadVersionAsync(ulong version, ICancellationToken cancellationToken)
         {
+            using var operation = new SafeHandleLease(this);
             if (!this.tableStorageOptions.IsKernelSupported())
             {
                 throw new NotSupportedException(
@@ -326,6 +363,7 @@ namespace DeltaLake.Kernel.Core
         /// </remarks>
         internal override async Task LoadTimestampAsync(long timestampMilliseconds, ICancellationToken cancellationToken)
         {
+            using var operation = new SafeHandleLease(this);
             if (!this.tableStorageOptions.IsKernelSupported())
             {
                 throw new NotSupportedException(
@@ -337,7 +375,7 @@ namespace DeltaLake.Kernel.Core
 
             if (this.isKernelAllocated)
             {
-                long? resolved = base.Version();
+                long? resolved = VersionWhileLeased();
                 if (resolved is long v)
                 {
                     this.state.PinSnapshotTo(v);
@@ -351,11 +389,12 @@ namespace DeltaLake.Kernel.Core
         /// </remarks>
         internal override async Task UpdateIncrementalAsync(long? maxVersion, ICancellationToken cancellationToken)
         {
+            using var operation = new SafeHandleLease(this);
             await base.UpdateIncrementalAsync(maxVersion, cancellationToken).ConfigureAwait(false);
 
             if (this.isKernelAllocated)
             {
-                long? advanced = base.Version();
+                long? advanced = VersionWhileLeased();
                 if (advanced is long v)
                 {
                     this.state.PinSnapshotTo(v);
@@ -371,6 +410,7 @@ namespace DeltaLake.Kernel.Core
         /// </remarks>
         internal override DeltaLake.Table.TableMetadata Metadata()
         {
+            using var operation = new SafeHandleLease(this);
             DeltaLake.Table.TableMetadata metadata = base.Metadata();
             if (this.isKernelAllocated)
             {
@@ -404,6 +444,7 @@ namespace DeltaLake.Kernel.Core
             ICancellationToken cancellationToken)
         {
             this.ThrowIfKernelNotSupported();
+            using var operation = new SafeHandleLease(this);
 
             using Apache.Arrow.RecordBatch addFilesBatch = AddActionRecordBatchBuilder.Build(actions);
 
@@ -439,6 +480,7 @@ namespace DeltaLake.Kernel.Core
             ICancellationToken cancellationToken)
         {
             this.ThrowIfKernelNotSupported();
+            using var operation = new SafeHandleLease(this);
 
             return await SyncToAsyncShim
                 .ExecuteAsync(
@@ -459,6 +501,7 @@ namespace DeltaLake.Kernel.Core
 
         internal async Task CheckpointAsync(CheckpointOptions options, ICancellationToken cancellationToken)
         {
+            using var operation = new SafeHandleLease(this);
             if (!this.isKernelAllocated)
             {
                 throw new NotSupportedException(
@@ -566,25 +609,28 @@ namespace DeltaLake.Kernel.Core
 
         protected override unsafe bool ReleaseHandle()
         {
-            if (this.isKernelAllocated)
+            try
             {
-                this.state.Dispose();
-                this.allocatorHandle?.Free();
-                if (this.tableLocationHandle.IsAllocated) this.tableLocationHandle.Free();
-                if (this.addFilesNativeSchema != null) Apache.Arrow.C.CArrowSchema.Free(this.addFilesNativeSchema);
-                foreach (GCHandle handle in this.storageOptionsKeyHandles) if (handle.IsAllocated) handle.Free();
-                foreach (GCHandle handle in this.storageOptionsValueHandles) if (handle.IsAllocated) handle.Free();
-                Marshal.FreeHGlobal((IntPtr)this.gcPinnedStorageOptionsKeyPtrs);
-                Marshal.FreeHGlobal((IntPtr)this.gcPinnedStorageOptionsValuePtrs);
-
-                // EngineBuilder* does not need to be deallocated
-                //
-                // >>> https://delta-users.slack.com/archives/C04TRPG3LHZ/p1727978348653369
-                //
-                Methods.free_engine(kernelOwnedSharedExternEnginePtr);
+                try { this.state?.Dispose(); }
+                finally
+                {
+                    try
+                    {
+                        if (this.kernelOwnedSharedExternEnginePtr != null) Methods.free_engine(this.kernelOwnedSharedExternEnginePtr);
+                    }
+                    finally
+                    {
+                        if (this.addFilesNativeSchema != null) Apache.Arrow.C.CArrowSchema.Free(this.addFilesNativeSchema);
+                        if (this.tableLocationHandle.IsAllocated) this.tableLocationHandle.Free();
+                        foreach (GCHandle pinned in this.storageOptionsKeyHandles) if (pinned.IsAllocated) pinned.Free();
+                        foreach (GCHandle pinned in this.storageOptionsValueHandles) if (pinned.IsAllocated) pinned.Free();
+                        Marshal.FreeHGlobal((IntPtr)this.gcPinnedStorageOptionsKeyPtrs);
+                        Marshal.FreeHGlobal((IntPtr)this.gcPinnedStorageOptionsValuePtrs);
+                    }
+                }
             }
-
-            return base.ReleaseHandle();
+            finally { base.ReleaseHandle(); }
+            return true;
         }
 
         #endregion SafeHandle implementation
@@ -674,6 +720,7 @@ namespace DeltaLake.Kernel.Core
         // Iterator method: contains no unsafe code — all FFI is delegated to TableChangesContext.
         private IEnumerable<Apache.Arrow.RecordBatch> ExecuteTableChanges(TableChangesOptions options)
         {
+            using var lifetime = new SafeHandleLease(this);
             using (TableChangesContext context = CreateTableChangesContext(options))
             {
                 for (; ; )

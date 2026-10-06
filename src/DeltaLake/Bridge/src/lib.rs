@@ -9,6 +9,7 @@
 )]
 
 pub mod error;
+pub mod headers;
 pub mod runtime;
 pub mod schema;
 #[macro_use]
@@ -169,14 +170,18 @@ pub struct ByteArrayRef {
 
 impl ByteArrayRef {
     fn to_slice(&self) -> &[u8] {
-        unsafe { std::slice::from_raw_parts(self.data, self.size) }
+        if self.size == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(self.data, self.size) }
+        }
     }
 
     fn to_str(&self) -> &str {
         // Trust caller to send UTF8. Even if we did do a checked call here with
         // error, the caller can still have a bad pointer or something else
         // wrong. Therefore we trust the caller implicitly.
-        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(self.data, self.size)) }
+        unsafe { std::str::from_utf8_unchecked(self.to_slice()) }
     }
 
     fn to_owned_string(&self) -> String {

@@ -36,6 +36,64 @@ public class CdcTests
         Assert.NotNull(schema.GetFieldByName(CommitTimestampColumn));
     }
 
+    [Fact]
+    public async Task ReadTableChanges_FirstBatch_AllowsVersionAndMetadataReentry()
+    {
+        using IEngine engine = new DeltaEngine(EngineOptions.Default);
+        using ITable table = await engine.LoadTableAsync(
+            new TableOptions { TableLocation = TableIdentifier.SimpleTableWithCdc.TablePath() },
+            CancellationToken.None);
+        ulong? expectedVersion = table.Version();
+
+        await using var enumerator = table.QueryTableChangesAsync(
+            new TableChangesOptions(startVersion: 0), CancellationToken.None).GetAsyncEnumerator();
+        Assert.True(await enumerator.MoveNextAsync());
+        using RecordBatch firstBatch = enumerator.Current;
+        Assert.True(firstBatch.Length > 0);
+
+        var operation = Task.Run(() => (Version: table.Version(), Metadata: table.Metadata()));
+        Task completed = await Task.WhenAny(operation, Task.Delay(TimeSpan.FromSeconds(15)));
+        if (completed != operation)
+        {
+            await enumerator.DisposeAsync();
+        }
+
+        var result = await operation;
+        Assert.Same(operation, completed);
+        Assert.Equal(expectedVersion, result.Version);
+        Assert.NotNull(result.Metadata);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadTableChanges_TableDisposedAfterFirstBatch_KeepsIteratorAlive(bool drain)
+    {
+        using IEngine engine = new DeltaEngine(EngineOptions.Default);
+        using ITable table = await engine.LoadTableAsync(
+            new TableOptions { TableLocation = TableIdentifier.SimpleTableWithCdc.TablePath() },
+            CancellationToken.None);
+
+        await using var enumerator = table.QueryTableChangesAsync(
+            new TableChangesOptions(startVersion: 0), CancellationToken.None).GetAsyncEnumerator();
+        Assert.True(await enumerator.MoveNextAsync());
+        using RecordBatch firstBatch = enumerator.Current;
+        Assert.True(firstBatch.Length > 0);
+
+        table.Dispose();
+
+        if (drain)
+        {
+            while (await enumerator.MoveNextAsync())
+            {
+                using RecordBatch batch = enumerator.Current;
+            }
+        }
+
+        await enumerator.DisposeAsync();
+        Assert.Throws<ObjectDisposedException>(() => table.Version());
+    }
+
     // -----------------------------------------------------------------------
     // Version range: EndVersion limits which commits are returned
     // -----------------------------------------------------------------------

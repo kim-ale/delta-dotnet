@@ -119,7 +119,7 @@ namespace DeltaLake.Kernel.Arrow.Handlers
                 ExclusiveFileReadResultIterator* arrowReadIterator = isParquetFileReadOk.Anonymous.Anonymous1.ok;
                 for (; ; )
                 {
-                    ExternResultbool isArrowResultReadOk = Methods.read_result_next(arrowReadIterator, context, Marshal.GetFunctionPointerForDelegate(VisitCallbacks.IngestArrowData));
+                    ExternResultbool isArrowResultReadOk = BooleanResultMethods.ReadResultNext(arrowReadIterator, context, Marshal.GetFunctionPointerForDelegate(VisitCallbacks.IngestArrowData));
                     if (isArrowResultReadOk.tag != ExternResultbool_Tag.Okbool)
                     {
                         throw KernelException.FromEngineError(

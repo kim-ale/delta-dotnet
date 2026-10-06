@@ -47,6 +47,11 @@ pub enum DeltaTableErrorCode {
 }
 
 impl DeltaTableError {
+    #[cfg(test)]
+    pub(crate) fn message(&self) -> &str {
+        unsafe { std::str::from_utf8(std::slice::from_raw_parts(self.error.data, self.error.size)).unwrap() }
+    }
+
     pub(crate) fn new(_runtime: &mut Runtime, code: DeltaTableErrorCode, error: &str) -> Self {
         Self {
             code,

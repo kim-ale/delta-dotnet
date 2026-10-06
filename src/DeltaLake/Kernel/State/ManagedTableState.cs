@@ -548,7 +548,7 @@ namespace DeltaLake.Kernel.State
                 iter = iterHandle.Anonymous.Anonymous1.ok;
                 for (; ; )
                 {
-                    ExternResultbool ok = Methods.scan_metadata_next(
+                    ExternResultbool ok = BooleanResultMethods.ScanMetadataNext(
                         iter,
                         ctxPtr,
                         Marshal.GetFunctionPointerForDelegate<VisitScanDataDelegate>(VisitCallbacks.VisitScanData));

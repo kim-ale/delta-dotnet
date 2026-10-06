@@ -46,7 +46,7 @@ jobs:
         with:
           workspaces: |
             src/DeltaLake/Bridge
-            src/DeltaLake/Kernel/delta-kernel-rs
+            src/DeltaLake/Kernel/Host
 
       - name: Setup .NET
         uses: actions/setup-dotnet@55ec9447dda3d1cf6bd587150f3262f30ee10815 # v3.4.2

@@ -107,26 +107,31 @@ jobs:
         include:
           - os: ubuntu-latest
             kernel-out-file: libdelta_kernel_ffi.so
+            kernel-host-file: libdelta_dotnet_kernel_host.so
             out-prefix: linux-x64
             # We use cross to build on x64 for compatibility with older glibc
             use-cross: true
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-arm
             kernel-out-file: libdelta_kernel_ffi.so
+            kernel-host-file: libdelta_dotnet_kernel_host.so
             out-prefix: linux-arm64
             runsOn: ubuntu-latest
             use-cross: true
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
             kernel-out-file: libdelta_kernel_ffi.dylib
+            kernel-host-file: libdelta_dotnet_kernel_host.dylib
             out-prefix: osx-x64
             target: x86_64-apple-darwin
           - os: macos-arm
             kernel-out-file: libdelta_kernel_ffi.dylib
+            kernel-host-file: libdelta_dotnet_kernel_host.dylib
             out-prefix: osx-arm64
             runsOn: macos-latest
           - os: windows-latest
             kernel-out-file: delta_kernel_ffi.dll
+            kernel-host-file: delta_dotnet_kernel_host.dll
             out-prefix: win-x64
     runs-on: ${{ matrix.runsOn || matrix.os }}
     steps:
@@ -147,7 +152,7 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          workspaces: src/DeltaLake/Kernel/delta-kernel-rs
+          workspaces: src/DeltaLake/Kernel/Host
           key: ${{ matrix.os }}-kernel
 
       - name: Compute target variables
@@ -155,11 +160,12 @@ jobs:
         run: |
           if [ -n "${{ matrix.target }}" ]; then
             echo "target-arg=--target ${{ matrix.target }}" >> $GITHUB_OUTPUT
-            echo "kernel-out-path=src/DeltaLake/Kernel/delta-kernel-rs/target/${{ matrix.target }}/release/${{ matrix.kernel-out-file }}" >> $GITHUB_OUTPUT
+            echo "kernel-host-path=src/DeltaLake/Kernel/Host/target/${{ matrix.target }}/release/${{ matrix.kernel-host-file }}" >> $GITHUB_OUTPUT
           else
             echo "target-arg=" >> $GITHUB_OUTPUT
-            echo "kernel-out-path=src/DeltaLake/Kernel/delta-kernel-rs/target/release/${{ matrix.kernel-out-file }}" >> $GITHUB_OUTPUT
+            echo "kernel-host-path=src/DeltaLake/Kernel/Host/target/release/${{ matrix.kernel-host-file }}" >> $GITHUB_OUTPUT
           fi
+          echo "kernel-out-path=kernel-artifact/${{ matrix.kernel-out-file }}" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Add alternative Rust target
@@ -174,16 +180,28 @@ jobs:
 
       - name: Build Kernel
         if: ${{ !matrix.use-cross }}
-        run: cargo build --manifest-path src/DeltaLake/Kernel/delta-kernel-rs/ffi/Cargo.toml --release --no-default-features --features "default-engine-rustls,arrow-58" ${{ steps.target-info.outputs.target-arg }}
+        env:
+          CARGO_TARGET_DIR: src/DeltaLake/Kernel/Host/target
+        run: cargo build --manifest-path src/DeltaLake/Kernel/Host/Cargo.toml --release --locked ${{ steps.target-info.outputs.target-arg }}
 
       - name: Build Kernel with cross
         if: ${{ matrix.use-cross }}
+        env:
+          CARGO_TARGET_DIR: src/DeltaLake/Kernel/Host/target
         run: |
           CROSS_CONFIG=src/DeltaLake/Kernel/Build/Cross.toml \
-          cross build --manifest-path src/DeltaLake/Kernel/delta-kernel-rs/ffi/Cargo.toml --release \
-                      --no-default-features \
-                      --features "default-engine-rustls,arrow-58" \
+          cross build --manifest-path src/DeltaLake/Kernel/Host/Cargo.toml --release --locked \
                       --target ${{ matrix.target }}
+
+      - name: Stage kernel host
+        shell: bash
+        run: |
+          mkdir -p kernel-artifact
+          cp "${{ steps.target-info.outputs.kernel-host-path }}" "${{ steps.target-info.outputs.kernel-out-path }}"
+
+      - name: Verify kernel host exports
+        shell: pwsh
+        run: ./.scripts/Test-KernelHostExports.ps1 -LibraryPath '${{ steps.target-info.outputs.kernel-out-path }}'
 
       - name: Upload kernel library
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

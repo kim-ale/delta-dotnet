@@ -67,7 +67,7 @@ namespace DeltaLake.Kernel.Callbacks.Visit
                 ) =>
                 {
                     EngineContext* ctx = (EngineContext*)engineContext;
-                    Methods.visit_scan_metadata(
+                    BooleanResultMethods.VisitScanMetadata(
                         scanMetadata,
                         ctx->Engine,
                         engineContext,
@@ -86,7 +86,7 @@ namespace DeltaLake.Kernel.Callbacks.Visit
         /// <param name="parquetFileSize">The file size.</param>
         /// <param name="modTime">The file modification time.</param>
         /// <param name="stats">The file statistics.</param>
-        /// <param name="dvInfo">The selection vector information.</param>
+        /// <param name="dvInfoAddress">The selection vector information address.</param>
         /// <param name="transform">The transform to execute on the row</param>
         /// <param name="partitionMap">The partition map.</param>
         // TODO: scan_metadata_next_arrow
@@ -100,7 +100,7 @@ namespace DeltaLake.Kernel.Callbacks.Visit
             long parquetFileSize,
             long modTime,
             Stats* stats,
-            CDvInfo* dvInfo,
+            IntPtr dvInfoAddress,
             Expression* transform,
             CStringMap* partitionMap
         );
@@ -112,16 +112,17 @@ namespace DeltaLake.Kernel.Callbacks.Visit
                     long parquetFileSize,
                     long modTime,
                     Stats* stats,
-                    CDvInfo* dvInfo,
+                    IntPtr dvInfoAddress,
                     Expression* transform,
                     CStringMap* partitionMap
                 ) =>
                 {
                     EngineContext* context = (EngineContext*)engineContext;
+                    CDvInfo* dvInfo = (CDvInfo*)dvInfoAddress;
                     var rootString = MarshalExtensions.PtrToStringUTF8((IntPtr)context->TableRoot);
                     var tableRoot = context->KernelTableRoot();
-                    ExternResultKernelBoolSlice selectionVectorRes = Methods.selection_vector_from_dv(
-                        dvInfo->info,
+                    ExternResultKernelBoolSlice selectionVectorRes = BooleanResultMethods.SelectionVectorFromDv(
+                        (IntPtr)dvInfo->info,
                         context->Engine,
                         tableRoot);
                     if (selectionVectorRes.tag != ExternResultKernelBoolSlice_Tag.OkKernelBoolSlice)

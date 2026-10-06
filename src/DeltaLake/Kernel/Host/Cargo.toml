@@ -1,0 +1,28 @@
+[package]
+name = "delta-dotnet-kernel-host"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+name = "delta_dotnet_kernel_host"
+crate-type = ["cdylib"]
+
+[dependencies]
+upstream_ffi = { package = "delta_kernel_ffi", path = "../delta-kernel-rs/ffi", default-features = false, features = ["default-engine-rustls", "arrow-58", "internal-api"] }
+delta_kernel = { path = "../delta-kernel-rs/kernel", default-features = false, features = ["arrow-58", "default-engine-base", "internal-api"] }
+delta_kernel_default_engine = { path = "../delta-kernel-rs/default-engine", default-features = false, features = ["arrow-58", "rustls"] }
+delta-http-headers = { path = "../../Http/Native" }
+url = "2"
+
+[dev-dependencies]
+http = "=1.3.1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

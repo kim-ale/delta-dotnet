@@ -13,6 +13,7 @@ using System;
 using System.Threading.Tasks;
 using DeltaLake.Bridge.Interop;
 using DeltaLake.Table;
+using DeltaLake.Http;
 using DeltaRustBridge = DeltaLake.Bridge;
 
 namespace DeltaLake.Kernel.Core
@@ -43,6 +44,8 @@ namespace DeltaLake.Kernel.Core
             System.Threading.CancellationToken cancellationToken
         )
         {
+            options = StorageOptionsSnapshot.Capture(options);
+            using var lease = new DeltaRustBridge.Scope(this);
             IntPtr tablePtr = await base.LoadTablePtrAsync(options, cancellationToken).ConfigureAwait(false);
             unsafe
             {
@@ -60,6 +63,8 @@ namespace DeltaLake.Kernel.Core
             System.Threading.CancellationToken cancellationToken
         )
         {
+            options = StorageOptionsSnapshot.Capture(options);
+            using var lease = new DeltaRustBridge.Scope(this);
             IntPtr tablePtr = await base.CreateTablePtrAsync(options, cancellationToken).ConfigureAwait(false);
             unsafe
             {

@@ -11,6 +11,8 @@ This package is a C# wrapper around [delta-rs](https://github.com/delta-io/delta
 It uses the [tokio-rs](https://tokio.rs/) runtime to provide asynchronous behavior. This allows the usage of .NET Tasks and async/await to take advantage of the same behavior provided by the underlying rust library.
 This library also takes advantage of the [Apache Arrow](https://github.com/apache/arrow/blob/main/csharp/README.md) [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html) to minimize the amount of copying required to move data between runtimes.
 
+For asynchronous custom Azure storage headers, see [Storage Request Headers](docs/storage-request-headers.md).
+
 ![alt text](/media/images/delta-dot-net-pkg.png "Using a Rust bridge and Kernel library with .NET p/invoke")
 
 The bridge library incorporates delta-rs, delta-kernel-rs and [tokio-rs](https://tokio.rs/) as shown in the image below.

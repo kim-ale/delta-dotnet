@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using DeltaLake.Http;
 
 namespace DeltaLake.Bridge
 {
@@ -10,6 +11,27 @@ namespace DeltaLake.Bridge
     internal sealed class Scope : IDisposable
     {
         private readonly List<object> toKeepAlive = new();
+        private readonly List<SafeHandleLease> owners = new();
+        private bool disposed;
+
+        internal Scope(params SafeHandle[] handles)
+        {
+            try
+            {
+                foreach (var owner in handles) owners.Add(new SafeHandleLease(owner));
+            }
+            catch
+            {
+                foreach (var owner in owners) owner.Dispose();
+                throw;
+            }
+        }
+
+        internal T KeepAlive<T>(T value) where T : IDisposable
+        {
+            toKeepAlive.Add(value);
+            return value;
+        }
 
         /// <summary>
         /// Create a byte array ref.
@@ -150,17 +172,26 @@ namespace DeltaLake.Bridge
         /// <inheritdoc />
         public void Dispose()
         {
-            foreach (var v in toKeepAlive)
+            if (disposed) return;
+            disposed = true;
+            try
             {
-                switch (v)
+                foreach (var v in toKeepAlive)
                 {
-                    case GCHandle handle:
-                        handle.Free();
-                        break;
-                    case IDisposable disposable:
-                        disposable.Dispose();
-                        break;
+                    switch (v)
+                    {
+                        case GCHandle handle:
+                            handle.Free();
+                            break;
+                        case IDisposable disposable:
+                            disposable.Dispose();
+                            break;
+                    }
                 }
+            }
+            finally
+            {
+                for (var index = owners.Count - 1; index >= 0; index--) owners[index].Dispose();
             }
             // This keep alive does nothing obviously, but it's good documentation to understand the
             // purpose of this separate dispose call

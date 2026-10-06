@@ -8,6 +8,7 @@ using Apache.Arrow.C;
 using Apache.Arrow.Ipc;
 using DeltaLake.Bridge.Interop;
 using DeltaLake.Errors;
+using DeltaLake.Http;
 using DeltaLake.Table;
 using ICancellationToken = System.Threading.CancellationToken;
 
@@ -33,6 +34,7 @@ namespace DeltaLake.Bridge
         internal readonly unsafe Interop.RawDeltaTable* _ptr;
 
         internal readonly Runtime _runtime;
+        private readonly SafeHandleLease runtimeLease;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="Table"/> class.
@@ -44,6 +46,15 @@ namespace DeltaLake.Bridge
         {
             _ptr = inner;
             _runtime = runtime;
+            try
+            {
+                runtimeLease = new SafeHandleLease(runtime);
+            }
+            catch
+            {
+                Interop.Methods.table_free(inner);
+                throw;
+            }
             SetHandle((IntPtr)_ptr);
         }
 
@@ -52,7 +63,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task LoadVersionAsync(ulong version, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -65,6 +76,7 @@ namespace DeltaLake.Bridge
                     {
                         if (cancellationToken.IsCancellationRequested)
                         {
+                            if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                             tsc.TrySetCanceled(cancellationToken);
                             return;
                         }
@@ -87,7 +99,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task LoadTimestampAsync(long timestampMilliseconds, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -100,6 +112,7 @@ namespace DeltaLake.Bridge
                     {
                         if (cancellationToken.IsCancellationRequested)
                         {
+                            if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                             tsc.TrySetCanceled(cancellationToken);
                             return;
                         }
@@ -121,6 +134,12 @@ namespace DeltaLake.Bridge
 
         internal virtual long? Version()
         {
+            using var lease = new Scope(_runtime, this);
+            return VersionWhileLeased();
+        }
+
+        protected long? VersionWhileLeased()
+        {
             unsafe
             {
                 var version = Interop.Methods.table_version(_ptr).ToInt64();
@@ -130,6 +149,7 @@ namespace DeltaLake.Bridge
 
         internal virtual string Uri()
         {
+            using var lease = new Scope(_runtime, this);
             unsafe
             {
                 var uri = Interop.Methods.table_uri(_ptr);
@@ -153,7 +173,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task<string[]> FileUrisAsync(System.Threading.CancellationToken cancellationToken = default)
         {
             var tsc = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var scope = new Scope();
+            using var scope = new Scope(_runtime, this);
 
             unsafe
             {
@@ -172,7 +192,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task<string[]> FilesAsync(System.Threading.CancellationToken cancellationToken = default)
         {
             var tsc = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var scope = new Scope();
+            using var scope = new Scope(_runtime, this);
 
             unsafe
             {
@@ -190,6 +210,7 @@ namespace DeltaLake.Bridge
 
         internal virtual ProtocolInfo ProtocolVersions()
         {
+            using var lease = new Scope(_runtime, this);
             unsafe
             {
                 var response = Methods.table_protocol_versions(_runtime.Ptr, _ptr);
@@ -203,6 +224,7 @@ namespace DeltaLake.Bridge
 
         internal virtual Schema Schema()
         {
+            using var lease = new Scope(_runtime, this);
             unsafe
             {
                 var result = Methods.table_schema(_runtime.Ptr, _ptr);
@@ -247,7 +269,7 @@ namespace DeltaLake.Bridge
             // aren't run on a Tokio thread, which could lead to deadlocks if a continuation
             // tries to call another bridge method.
             var tsc = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -268,6 +290,7 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                                 tsc.TrySetCanceled(cancellationToken);
                                 return;
                             }
@@ -304,7 +327,7 @@ namespace DeltaLake.Bridge
             }
 
             var tsc = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 using (var stream = new RecordBatchReader(records, schema))
                 {
@@ -325,6 +348,8 @@ namespace DeltaLake.Bridge
 
                                 if (cancellationToken.IsCancellationRequested)
                                 {
+                                    if (fail != null) Methods.error_free(_runtime.Ptr, fail);
+                                    if (success != null) Methods.byte_array_free(_runtime.Ptr, (Interop.ByteArray*)success);
                                     tsc.TrySetCanceled(cancellationToken);
                                 }
                                 else if (fail != null)
@@ -357,7 +382,7 @@ namespace DeltaLake.Bridge
             ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<IArrowArrayStream>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -371,6 +396,11 @@ namespace DeltaLake.Bridge
                     {
                         if (cancellationToken.IsCancellationRequested)
                         {
+                            if (fail != null) Methods.error_free(_runtime.Ptr, fail);
+                            if (success != null)
+                            {
+                                using var abandoned = CArrowArrayStreamImporter.ImportArrayStream((CArrowArrayStream*)success);
+                            }
                             tsc.TrySetCanceled(cancellationToken);
                             return;
                         }
@@ -397,7 +427,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task<string> DeleteAsync(string predicate, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -410,6 +440,8 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
+                                if (success != null) Methods.byte_array_free(_runtime.Ptr, (Interop.ByteArray*)success);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -433,7 +465,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task<string> UpdateAsync(string query, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -446,6 +478,8 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
+                                if (success != null) Methods.byte_array_free(_runtime.Ptr, (Interop.ByteArray*)success);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -469,7 +503,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task<byte[]> HistoryAsync(ulong limit, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<byte[]>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -482,6 +516,8 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
+                                if (success != null) Methods.byte_array_free(_runtime.Ptr, (Interop.ByteArray*)success);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -510,7 +546,7 @@ namespace DeltaLake.Bridge
             }
 
             var tsc = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -524,6 +560,7 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -544,7 +581,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task UpdateIncrementalAsync(long? maxVersion, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -557,6 +594,7 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -577,6 +615,7 @@ namespace DeltaLake.Bridge
 
         internal virtual DeltaLake.Table.TableMetadata Metadata()
         {
+            using var lease = new Scope(_runtime, this);
             unsafe
             {
                 var result = Methods.table_metadata(_runtime.Ptr, _ptr);
@@ -604,7 +643,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task RestoreAsync(RestoreOptions options, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -621,6 +660,7 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -641,7 +681,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task OptimizeAsync(DeltaLake.Table.OptimizeOptions options, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -676,6 +716,7 @@ namespace DeltaLake.Bridge
                         {
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -696,7 +737,7 @@ namespace DeltaLake.Bridge
         internal virtual async Task VacuumAsync(DeltaLake.Table.VacuumOptions options, ICancellationToken cancellationToken)
         {
             var tsc = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using (var scope = new Scope())
+            using (var scope = new Scope(_runtime, this))
             {
                 unsafe
                 {
@@ -715,8 +756,10 @@ namespace DeltaLake.Bridge
                         scope.Pointer(interopOptions),
                         scope.FunctionPointer<Interop.GenericErrorCallback>((_success, fail) =>
                         {
+                            if (_success != null) Methods.dynamic_array_free(_runtime.Ptr, (DynamicArray*)_success);
                             if (cancellationToken.IsCancellationRequested)
                             {
+                                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
                                 tsc.TrySetCanceled(cancellationToken);
                             }
                             else if (fail != null)
@@ -739,12 +782,13 @@ namespace DeltaLake.Bridge
         #region SafeHandle implementation
 
         /// <inheritdoc />
-        public override bool IsInvalid => false;
+        public override bool IsInvalid => handle == IntPtr.Zero;
 
         /// <inheritdoc />
         protected override unsafe bool ReleaseHandle()
         {
-            Interop.Methods.table_free(_ptr);
+            try { Interop.Methods.table_free(_ptr); }
+            finally { runtimeLease.Dispose(); }
             return true;
         }
 
@@ -777,6 +821,8 @@ namespace DeltaLake.Bridge
         {
             if (cancellationToken.IsCancellationRequested)
             {
+                if (fail != null) Methods.error_free(_runtime.Ptr, fail);
+                if (success != null) Methods.dynamic_array_free(_runtime.Ptr, (DynamicArray*)success);
                 taskCompletionSource.TrySetCanceled(cancellationToken);
                 return;
             }

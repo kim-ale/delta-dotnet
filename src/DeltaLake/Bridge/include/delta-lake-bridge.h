@@ -96,6 +96,53 @@ typedef struct DeltaTableError {
 } DeltaTableError;
 
 /**
+ * Borrowed counted bytes, valid only for the duration of the receiving call.
+ */
+typedef struct ByteSlice {
+  /**
+   * Address of the first byte; null is permitted only when no bytes are read.
+   */
+  const uint8_t *data;
+  /**
+   * Byte count, not a character count.
+   */
+  uintptr_t len;
+} ByteSlice;
+
+/**
+ * Copied synchronously by registration. All three callbacks are required.
+ * Callbacks must return promptly, never unwind, and remain callable for process lifetime.
+ * Begin returns zero only after accepting work, and must copy method/URI before returning.
+ * Cancel is cooperative; released retires native ownership, not managed workers.
+ */
+typedef struct HeaderCallbacks {
+  /**
+   * Must equal [`ABI_VERSION`].
+   */
+  uint32_t abi_version;
+  /**
+   * Must equal `size_of::<HeaderCallbacks>()` for version one.
+   */
+  uint32_t struct_size;
+  /**
+   * Nonzero identifier supplied by the managed caller.
+   */
+  uint64_t context_id;
+  /**
+   * Receives context, never-reused request, method bytes and original URI bytes.
+   */
+  uint32_t (*begin)(uint64_t, uint64_t, struct ByteSlice, struct ByteSlice);
+  /**
+   * Receives context and request when an accepted pending future is retired.
+   */
+  void (*cancel)(uint64_t, uint64_t);
+  /**
+   * Receives context exactly once on final native owner retirement.
+   */
+  void (*released)(uint64_t);
+} HeaderCallbacks;
+
+/**
  * If fail is not null, it must be manually freed when done. Runtime is always
  * present, but it should never be used if fail is present, only freed after
  * fail is freed using it.
@@ -260,6 +307,15 @@ void cancellation_token_free(struct CancellationToken *token);
 
 void error_free(struct Runtime *_runtime, const struct DeltaTableError *error);
 
+uint32_t bridge_headers_register(const struct HeaderCallbacks *callbacks);
+
+void bridge_headers_unregister(uint64_t context);
+
+uint32_t bridge_headers_complete(uint64_t context,
+                                 uint64_t request,
+                                 uint32_t status,
+                                 struct ByteSlice bytes);
+
 struct RuntimeOrFail runtime_new(const struct RuntimeOptions *options);
 
 void runtime_free(struct Runtime *runtime);
@@ -294,11 +350,24 @@ void create_deltalake(struct Runtime *_Nonnull runtime,
                       const struct CancellationToken *cancellation_token,
                       TableNewCallback callback);
 
+void create_deltalake_with_headers(struct Runtime *_Nonnull runtime,
+                                   struct TableCreatOptions *_Nonnull options,
+                                   const struct CancellationToken *cancellation_token,
+                                   uint64_t context,
+                                   TableNewCallback callback);
+
 void table_new(struct Runtime *_Nonnull runtime,
                struct ByteArrayRef *_Nonnull table_uri,
                struct TableOptions *_Nonnull table_options,
                const struct CancellationToken *cancellation_token,
                TableNewCallback callback);
+
+void table_new_with_headers(struct Runtime *_Nonnull runtime,
+                            struct ByteArrayRef *_Nonnull table_uri,
+                            struct TableOptions *_Nonnull table_options,
+                            const struct CancellationToken *cancellation_token,
+                            uint64_t context,
+                            TableNewCallback callback);
 
 void table_file_uris(struct Runtime *_Nonnull runtime,
                      struct RawDeltaTable *_Nonnull table,
