@@ -36,12 +36,20 @@ internal static class InteropLayout
             throw new PlatformNotSupportedException("This native artifact package supports Windows x64 only.");
         }
 
-        if (Marshal.SizeOf<NativeStoreDescriptor>() != 56 ||
+        if (Marshal.SizeOf<NativeStoreDescriptor>() != 72 ||
             Marshal.SizeOf<NativeStringSlice>() != 16 ||
             Marshal.SizeOf<NativeObjectMetadata>() != 32 ||
             Marshal.SizeOf<NativeHandleResult>() != 16 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.AbiVersion)).ToInt32() != 0 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.StructSize)).ToInt32() != 4 ||
             Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Context)).ToInt32() != 8 ||
-            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Release)).ToInt32() != 48 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Get)).ToInt32() != 16 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListOpen)).ToInt32() != 24 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListNext)).ToInt32() != 32 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListClose)).ToInt32() != 40 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Put)).ToInt32() != 48 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Delete)).ToInt32() != 56 ||
+            Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Release)).ToInt32() != 64 ||
             Marshal.OffsetOf<NativeHandleResult>(nameof(NativeHandleResult.Value)).ToInt32() != 8)
         {
             throw new InvalidOperationException("The managed layouts do not match the public x64 C ABI.");
@@ -64,6 +72,8 @@ internal static class KernelNativeMethods
             "get_engine_builder", "builder_build", "free_engine_builder", "free_engine",
             "get_snapshot_builder", "snapshot_builder_build", "free_snapshot_builder",
             "free_snapshot", "version",
+            "transaction", "with_engine_info", "commit", "committed_transaction_version",
+            "free_transaction", "free_committed_transaction",
         ];
         foreach (var export in exports)
         {
@@ -110,6 +120,25 @@ internal static class KernelNativeMethods
 
     [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
     internal static extern ulong version(SnapshotHandle snapshot);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern NativeHandleResult transaction(NativeStringSlice path, EngineHandle engine);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern NativeHandleResult with_engine_info(
+        nint transaction, NativeStringSlice engineInfo, EngineHandle engine);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern NativeHandleResult commit(nint transaction, EngineHandle engine);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern ulong committed_transaction_version(in nint transaction);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern void free_transaction(nint transaction);
+
+    [DllImport(Library, CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+    internal static extern void free_committed_transaction(nint transaction);
 }
 
 internal static class PluginNativeMethods

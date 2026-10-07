@@ -5,8 +5,9 @@ namespace DeltaKernel.NativePrototype;
 /// <summary>Owns one Kernel engine using an independently constructed native store.</summary>
 /// <remarks>
 /// Operations and disposal are serialized. Every version read builds and disposes a fresh snapshot
-/// on the same engine. Only the native memory prototype permits commit mutation. Native module
-/// handles and the error allocator delegate remain rooted for process lifetime.
+/// on the same engine. CommitInfo exercises a public Kernel transaction without adding files;
+/// AppendCommit remains native memory fixture mutation only. Native module handles and the error
+/// allocator delegate remain rooted for process lifetime.
 /// </remarks>
 public sealed class NativeStoreSession : IDisposable
 {
@@ -43,7 +44,7 @@ public sealed class NativeStoreSession : IDisposable
     /// <param name="descriptorVersion">The ABI version passed to Kernel, including rejection probes.</param>
     /// <returns>A session over the native memory store.</returns>
     /// <exception cref="InvalidOperationException">Native factory, adoption, or builder setup fails.</exception>
-    public static NativeStoreSession CreateMemory(string tableUri = "memory:///table/", uint descriptorVersion = 1)
+    public static NativeStoreSession CreateMemory(string tableUri = "memory:///table/", uint descriptorVersion = 3)
     {
         PluginNativeMethods.EnsureLoaded();
         NativeStoreDescriptor descriptor = default;
@@ -82,6 +83,49 @@ public sealed class NativeStoreSession : IDisposable
             builder.Initialize(KernelErrors.Unwrap(KernelNativeMethods.get_snapshot_builder(path.Slice, engine)));
             snapshot.Initialize(KernelErrors.Unwrap(KernelNativeMethods.snapshot_builder_build(builder.Consume())));
             return KernelNativeMethods.version(snapshot);
+        }
+    }
+
+    /// <summary>Commits engine info through the public Kernel transaction exports.</summary>
+    /// <param name="engineInfo">The nonempty engine marker persisted in commitInfo.</param>
+    /// <returns>The version reported by the committed transaction.</returns>
+    /// <remarks>
+    /// This experimental fixture operation adds no files and is not a general Delta write API.
+    /// Kernel writes the commit through the native store retained by this session's engine.
+    /// </remarks>
+    /// <exception cref="ArgumentException">The engine marker is empty or whitespace.</exception>
+    /// <exception cref="ObjectDisposedException">The session has been disposed.</exception>
+    /// <exception cref="InvalidOperationException">Kernel cannot start, configure, or commit the transaction.</exception>
+    public ulong CommitInfo(string engineInfo)
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            using var path = new Utf8Argument(tableUri);
+            using var info = new Utf8Argument(engineInfo);
+            using var transaction = new TransactionHandle();
+            using var configuredTransaction = new TransactionHandle();
+            using var committedTransaction = new CommittedTransactionHandle();
+            transaction.Initialize(KernelErrors.Unwrap(KernelNativeMethods.transaction(path.Slice, engine)));
+            configuredTransaction.Initialize(KernelErrors.Unwrap(
+                KernelNativeMethods.with_engine_info(transaction.Consume(), info.Slice, engine)));
+            committedTransaction.Initialize(KernelErrors.Unwrap(
+                KernelNativeMethods.commit(configuredTransaction.Consume(), engine)));
+
+            var lease = false;
+            try
+            {
+                committedTransaction.DangerousAddRef(ref lease);
+                var rawTransaction = committedTransaction.DangerousGetHandle();
+                return KernelNativeMethods.committed_transaction_version(in rawTransaction);
+            }
+            finally
+            {
+                if (lease)
+                {
+                    committedTransaction.DangerousRelease();
+                }
+            }
         }
     }
 

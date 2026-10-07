@@ -59,3 +59,21 @@ internal sealed class SnapshotHandle : KernelHandle
         return true;
     }
 }
+
+internal sealed class TransactionHandle : KernelHandle
+{
+    protected override bool ReleaseHandle()
+    {
+        KernelNativeMethods.free_transaction(handle);
+        return true;
+    }
+}
+
+internal sealed class CommittedTransactionHandle : KernelHandle
+{
+    protected override bool ReleaseHandle()
+    {
+        KernelNativeMethods.free_committed_transaction(handle);
+        return true;
+    }
+}

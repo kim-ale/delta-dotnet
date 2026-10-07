@@ -14,12 +14,14 @@ internal sealed class AzureFixture : IAsyncDisposable
     private const string Modified = "Wed, 01 Jan 2020 00:00:00 GMT";
     private const string EntityTag = "\"native-prototype\"";
     private static readonly byte[] Commit = CreateCommit();
+    private readonly ConcurrentDictionary<string, byte[]> objects = new(StringComparer.Ordinal);
     private readonly HttpListener listener = new();
     private readonly ConcurrentQueue<ObservedRequest> requests = new();
     private readonly Task serverTask;
 
     internal AzureFixture()
     {
+        objects[CommitName] = Commit;
         var portProbe = new TcpListener(IPAddress.Loopback, 0);
         portProbe.Start();
         var port = ((IPEndPoint)portProbe.LocalEndpoint).Port;
@@ -77,10 +79,14 @@ internal sealed class AzureFixture : IAsyncDisposable
             try
             {
                 var request = context.Request;
-                requests.Enqueue(new ObservedRequest(
+                using var body = new MemoryStream();
+                await request.InputStream.CopyToAsync(body);
+                var observed = new ObservedRequest(
                     request.HttpMethod, request.Url?.PathAndQuery ?? string.Empty,
-                    request.Headers["Authorization"] ?? string.Empty));
-                await RespondAsync(context);
+                    request.Headers["Authorization"] ?? string.Empty,
+                    request.Headers["If-None-Match"] ?? string.Empty, body.ToArray());
+                requests.Enqueue(observed);
+                await RespondAsync(context, observed.Body);
             }
             finally
             {
@@ -89,7 +95,7 @@ internal sealed class AzureFixture : IAsyncDisposable
         }
     }
 
-    private async Task RespondAsync(HttpListenerContext context)
+    private async Task RespondAsync(HttpListenerContext context, byte[] requestBody)
     {
         var request = context.Request;
         var response = context.Response;
@@ -104,14 +110,38 @@ internal sealed class AzureFixture : IAsyncDisposable
             response.ContentType = "application/xml";
             body = CreateListing(request.QueryString["prefix"] ?? string.Empty);
         }
-        else if ((request.HttpMethod == "GET" || request.HttpMethod == "HEAD") && path == "/container/" + CommitName)
+        else if (request.HttpMethod == "PUT" && path.StartsWith("/container/", StringComparison.Ordinal))
+        {
+            var location = path["/container/".Length..];
+            if (request.Headers["If-None-Match"] == "*" && !objects.TryAdd(location, requestBody))
+            {
+                response.StatusCode = 409;
+                response.Headers["x-ms-error-code"] = "BlobAlreadyExists";
+            }
+            else
+            {
+                if (request.Headers["If-None-Match"] != "*")
+                {
+                    objects[location] = requestBody;
+                }
+
+                response.StatusCode = 201;
+                response.Headers["Last-Modified"] = Modified;
+                response.Headers["ETag"] = EntityTag;
+            }
+
+            body = Array.Empty<byte>();
+        }
+        else if ((request.HttpMethod == "GET" || request.HttpMethod == "HEAD") &&
+                 path.StartsWith("/container/", StringComparison.Ordinal) &&
+                 objects.TryGetValue(path["/container/".Length..], out var storedBody))
         {
             response.StatusCode = 200;
             response.ContentType = "application/json";
             response.Headers["Last-Modified"] = Modified;
             response.Headers["ETag"] = EntityTag;
             response.Headers["x-ms-blob-type"] = "BlockBlob";
-            body = Commit;
+            body = storedBody;
         }
         else
         {
@@ -133,14 +163,15 @@ internal sealed class AzureFixture : IAsyncDisposable
     private byte[] CreateListing(string prefix)
     {
         var blobs = new XElement("Blobs");
-        if (CommitName.StartsWith(prefix, StringComparison.Ordinal))
+        foreach (var entry in objects.Where(entry => entry.Key.StartsWith(prefix, StringComparison.Ordinal))
+                     .OrderBy(entry => entry.Key, StringComparer.Ordinal))
         {
             blobs.Add(new XElement("Blob",
-                new XElement("Name", CommitName),
+                new XElement("Name", entry.Key),
                 new XElement("Properties",
                     new XElement("Last-Modified", Modified),
                     new XElement("Etag", EntityTag),
-                    new XElement("Content-Length", Commit.Length),
+                    new XElement("Content-Length", entry.Value.Length),
                     new XElement("Content-Type", "application/json"),
                     new XElement("BlobType", "BlockBlob"),
                     new XElement("LeaseStatus", "unlocked"),
@@ -179,5 +210,6 @@ internal sealed class AzureFixture : IAsyncDisposable
         return Encoding.UTF8.GetBytes(protocol + "\n" + metadata + "\n");
     }
 
-    internal sealed record ObservedRequest(string Method, string PathAndQuery, string Authorization);
+    internal sealed record ObservedRequest(
+        string Method, string PathAndQuery, string Authorization, string IfNoneMatch, byte[] Body);
 }

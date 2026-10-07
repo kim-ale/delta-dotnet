@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using DeltaKernel.NativePrototype;
 
 namespace NativeObjectStore.Consumer;
@@ -10,16 +12,19 @@ internal static class Program
         try
         {
             VerifyLayouts();
-            GivenUnknownDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext();
+            GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(1);
+            GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(2);
+            GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(99);
             GivenInvalidTableUrl_WhenEngineBuilderFails_ReleasesAdoptedContext();
             GivenMissingTable_WhenSnapshotBuildFails_PreservesEngineAndFreesErrors();
             await GivenMemoryStore_WhenMutated_SeesNewVersionOnSameEngineAsync();
             GivenIndependentSessions_WhenOneMutates_IsolatesStateAndReleasesOnce();
             await GivenNativeAzure_WhenSnapshotsRepeat_ObservesCredentialRotationAsync();
+            await GivenNativeAzure_WhenKernelCommitsInfo_PersistsVersionOneOnSameEngineAsync();
             var final = NativeStoreSession.GetStatistics();
             Require(final.ErrorAllocations == final.ErrorReleases, "All returned Kernel errors must be freed.");
             Console.WriteLine("PASS all public-package native object-store probes");
-            Console.WriteLine("LIMITS Windows x64; snapshot/list/read fixtures; synthetic native Azure credentials; no live cloud or production Table integration.");
+            Console.WriteLine("LIMITS Windows x64; snapshot/read and no-Add Kernel commit fixtures; native process credential rotation, not OAuth; no live cloud or production Table integration.");
             return 0;
         }
         catch (Exception exception)
@@ -32,8 +37,8 @@ internal static class Program
     private static void VerifyLayouts()
     {
         var statistics = NativeStoreSession.GetStatistics();
-        Require(Marshal.SizeOf<NativeStoreDescriptor>() == 56, "Managed descriptor must be 56 bytes.");
-        Require(statistics.DescriptorSize == 56, "Independent native descriptor must be 56 bytes.");
+        Require(Marshal.SizeOf<NativeStoreDescriptor>() == 72, "Managed descriptor must be 72 bytes.");
+        Require(statistics.DescriptorSize == 72, "Independent native descriptor must be 72 bytes.");
         Require(statistics.StringSliceSize == 16, "String slices must be 16 bytes.");
         Require(statistics.ObjectMetadataSize == 32, "Object metadata must be 32 bytes.");
         Require(statistics.HandleResultSize == 16, "Tagged handle results must be 16 bytes.");
@@ -41,19 +46,21 @@ internal static class Program
         Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.StructSize)).ToInt32() == 4, "Size offset mismatch.");
         Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Context)).ToInt32() == 8, "Context offset mismatch.");
         Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Get)).ToInt32() == 16, "GET offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.List)).ToInt32() == 24, "LIST offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Put)).ToInt32() == 32, "PUT offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.DeleteObject)).ToInt32() == 40, "DELETE offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Release)).ToInt32() == 48, "Release offset mismatch.");
-        Console.WriteLine("PASS public x64 ABI layouts: descriptor 56, string 16, metadata 32, result 16");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListOpen)).ToInt32() == 24, "LIST open offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListNext)).ToInt32() == 32, "LIST next offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListClose)).ToInt32() == 40, "LIST close offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Put)).ToInt32() == 48, "PUT offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Delete)).ToInt32() == 56, "DELETE offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Release)).ToInt32() == 64, "Release offset mismatch.");
+        Console.WriteLine("PASS public x64 ABI layouts: v3 descriptor 72, string 16, metadata 32, result 16");
     }
 
-    private static void GivenUnknownDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext()
+    private static void GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(uint version)
     {
         var before = NativeStoreSession.GetStatistics();
         var error = Expect<InvalidOperationException>(() =>
         {
-            using var unexpected = NativeStoreSession.CreateMemory(descriptorVersion: 99);
+            using var unexpected = NativeStoreSession.CreateMemory(descriptorVersion: version);
         });
         var after = NativeStoreSession.GetStatistics();
         Require(error.Message.Contains("GenericError", StringComparison.Ordinal), "Descriptor rejection must come from the public Kernel error result.");
@@ -61,7 +68,7 @@ internal static class Program
         Require(after.Callbacks == before.Callbacks, "Descriptor rejection must perform no native store I/O.");
         Require(after.ErrorAllocations == before.ErrorAllocations + 1, "Rejection must allocate one Kernel error.");
         Require(after.ErrorReleases == before.ErrorReleases + 1, "Rejection error memory must be freed.");
-        Console.WriteLine("PASS invalid ABI adoption: caller release once, no I/O, error freed");
+        Console.WriteLine($"PASS rejected ABI {version}: caller release once, no I/O, error freed");
     }
 
     private static void GivenInvalidTableUrl_WhenEngineBuilderFails_ReleasesAdoptedContext()
@@ -84,13 +91,15 @@ internal static class Program
         using var session = NativeStoreSession.CreateMemory("memory:///missing/");
         Expect<InvalidOperationException>(() => session.GetVersion());
         Expect<InvalidOperationException>(() => session.GetVersion());
+        Expect<InvalidOperationException>(() => session.CommitInfo("missing-table-probe"));
+        Expect<InvalidOperationException>(() => session.CommitInfo("missing-table-probe"));
         var during = NativeStoreSession.GetStatistics();
-        Require(during.Releases == before.Releases, "Snapshot failure must not release the live engine's store.");
-        Require(during.ErrorAllocations >= before.ErrorAllocations + 2, "Repeated snapshot failures must return errors.");
-        Require(during.ErrorAllocations - before.ErrorAllocations == during.ErrorReleases - before.ErrorReleases, "Snapshot errors must be freed.");
+        Require(during.Releases == before.Releases, "Snapshot or transaction failure must not release the live engine's store.");
+        Require(during.ErrorAllocations >= before.ErrorAllocations + 4, "Repeated snapshot and transaction failures must return errors.");
+        Require(during.ErrorAllocations - before.ErrorAllocations == during.ErrorReleases - before.ErrorReleases, "Snapshot and transaction errors must be freed.");
         session.Dispose();
         Require(NativeStoreSession.GetStatistics().Releases == before.Releases + 1, "Failed snapshots must leave only one final context release.");
-        Console.WriteLine("PASS consuming snapshot-builder failure cleanup and retained engine");
+        Console.WriteLine("PASS snapshot-builder and transaction failure cleanup with retained engine");
     }
 
     private static async Task GivenMemoryStore_WhenMutated_SeesNewVersionOnSameEngineAsync()
@@ -115,6 +124,7 @@ internal static class Program
         Require(NativeStoreSession.GetStatistics().Releases == before.Releases + 1, "Repeated disposal must release exactly once.");
         Expect<ObjectDisposedException>(() => session.GetVersion());
         Expect<ObjectDisposedException>(session.AppendCommit);
+        Expect<ObjectDisposedException>(() => session.CommitInfo("disposed-session-probe"));
         Console.WriteLine($"PASS memory/list/live mutation 0 -> 1 on one engine; {during.Callbacks - before.Callbacks} native callbacks; serialized callers; final release once");
     }
 
@@ -155,7 +165,60 @@ internal static class Program
         session.Dispose();
         session.Dispose();
         Require(NativeStoreSession.GetStatistics().Releases == before.Releases + 1, "Azure must release once after engine disposal.");
-        Console.WriteLine($"PASS native Azure list/read and fake refresh on one engine: {during.Callbacks - before.Callbacks} callbacks, {during.CredentialRequests - before.CredentialRequests} credential requests, {generations} distinct Authorization generations");
+        Console.WriteLine($"PASS native Azure list/read and process credential rotation (not OAuth) on one engine: {during.Callbacks - before.Callbacks} callbacks, {during.CredentialRequests - before.CredentialRequests} credential requests, {generations} distinct credential generations");
+    }
+
+    private static async Task GivenNativeAzure_WhenKernelCommitsInfo_PersistsVersionOneOnSameEngineAsync()
+    {
+        const string marker = "native-store-write-probe";
+        const string commitPath = "/table/_delta_log/00000000000000000001.json";
+        await using var fixture = new AzureFixture();
+        var before = NativeStoreSession.GetStatistics();
+        using var session = NativeStoreSession.CreateAzure(fixture.Endpoint.AbsoluteUri);
+        Require(await Task.Run(session.GetVersion) == 0, "The write fixture must start at version zero.");
+        var beforeCommit = NativeStoreSession.GetStatistics();
+        Require(await Task.Run(() => session.CommitInfo(marker)) == 1, "The public Kernel transaction must commit version one.");
+        var afterCommit = NativeStoreSession.GetStatistics();
+        Require(afterCommit.Callbacks > beforeCommit.Callbacks, "The Kernel commit must invoke the native provider.");
+        Require(await Task.Run(session.GetVersion) == 1, "A fresh snapshot on the same engine must observe the committed version.");
+
+        var requests = fixture.Requests;
+        var writes = requests.Where(request => request.Method == "PUT" &&
+            request.PathAndQuery.EndsWith(commitPath, StringComparison.Ordinal)).ToArray();
+        Require(writes.Length > 0, "Native Azure must PUT the version-one Delta log object.");
+        Require(writes.All(request => request.IfNoneMatch == "*"), "Native commit PUT must request atomic creation.");
+        var lines = Encoding.UTF8.GetString(writes[0].Body)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Require(lines.Length > 0, "The captured native PUT must contain JSON actions.");
+        var hasEngineInfo = false;
+        foreach (var line in lines)
+        {
+            using var action = JsonDocument.Parse(line);
+            Require(!action.RootElement.TryGetProperty("add", out _), "CommitInfo must not add data files.");
+            if (action.RootElement.TryGetProperty("commitInfo", out var commitInfo) &&
+                commitInfo.TryGetProperty("engineInfo", out var engineInfo) &&
+                engineInfo.GetString()?.Contains(marker, StringComparison.Ordinal) == true)
+            {
+                hasEngineInfo = true;
+            }
+        }
+
+        Require(hasEngineInfo, "The actual native PUT body must persist the supplied commitInfo engine marker.");
+        Require(requests.All(request => request.Authorization.StartsWith("Bearer native-token-", StringComparison.Ordinal)), "Native write fixture requests must use synthetic native credentials.");
+        var generations = requests.Select(request => request.Authorization).Distinct(StringComparer.Ordinal).Count();
+        Require(generations >= 2, "Native process credentials must rotate on the same write engine.");
+        var during = NativeStoreSession.GetStatistics();
+        Require(during.CredentialRequests >= before.CredentialRequests + 2, "The write probe must advance native credential requests.");
+        Require(during.CredentialGeneration >= before.CredentialGeneration + 2, "The write probe must advance native credential generations.");
+        Require(during.Releases == before.Releases, "The committed transaction and fresh snapshot must leave the engine's store retained.");
+        Require(during.ErrorAllocations - before.ErrorAllocations == during.ErrorReleases - before.ErrorReleases, "Returned Kernel errors in the write probe must be freed.");
+        session.Dispose();
+        session.Dispose();
+        var after = NativeStoreSession.GetStatistics();
+        Require(after.Releases == before.Releases + 1, "The native write engine must release its context exactly once.");
+        Require(after.ErrorAllocations == after.ErrorReleases, "Engine cleanup must leave balanced returned error allocations.");
+        Expect<ObjectDisposedException>(() => session.CommitInfo(marker));
+        Console.WriteLine($"PASS public Kernel no-Add commit 0 -> 1 and snapshot on one native Azure engine; atomic PUT and commitInfo JSON verified; {during.Callbacks - before.Callbacks} callbacks; {generations} process credential generations (not OAuth); final release once");
     }
 
     private static void Require(bool condition, string message)
