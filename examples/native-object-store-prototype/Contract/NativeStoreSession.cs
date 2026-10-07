@@ -6,8 +6,9 @@ namespace DeltaKernel.NativePrototype;
 /// <remarks>
 /// Operations and disposal are serialized. Every version read builds and disposes a fresh snapshot
 /// on the same engine. CommitInfo exercises a public Kernel transaction without adding files;
-/// AppendCommit remains native memory fixture mutation only. Native module handles and the error
-/// allocator delegate remain rooted for process lifetime.
+/// CheckpointSnapshot writes through the public Kernel checkpoint export. AppendCommit remains
+/// native memory fixture mutation only. Native module handles and the error allocator delegate
+/// remain rooted for process lifetime.
 /// </remarks>
 public sealed class NativeStoreSession : IDisposable
 {
@@ -44,7 +45,7 @@ public sealed class NativeStoreSession : IDisposable
     /// <param name="descriptorVersion">The ABI version passed to Kernel, including rejection probes.</param>
     /// <returns>A session over the native memory store.</returns>
     /// <exception cref="InvalidOperationException">Native factory, adoption, or builder setup fails.</exception>
-    public static NativeStoreSession CreateMemory(string tableUri = "memory:///table/", uint descriptorVersion = 3)
+    public static NativeStoreSession CreateMemory(string tableUri = "memory:///table/", uint descriptorVersion = 4)
     {
         PluginNativeMethods.EnsureLoaded();
         NativeStoreDescriptor descriptor = default;
@@ -83,6 +84,56 @@ public sealed class NativeStoreSession : IDisposable
             builder.Initialize(KernelErrors.Unwrap(KernelNativeMethods.get_snapshot_builder(path.Slice, engine)));
             snapshot.Initialize(KernelErrors.Unwrap(KernelNativeMethods.snapshot_builder_build(builder.Consume())));
             return KernelNativeMethods.version(snapshot);
+        }
+    }
+
+    /// <summary>Checkpoints a fresh snapshot through the public Kernel checkpoint export.</summary>
+    /// <returns>
+    /// <see langword="true"/> when Kernel wrote the checkpoint, or <see langword="false"/>
+    /// when a checkpoint at the snapshot version already existed.
+    /// </returns>
+    /// <remarks>
+    /// Kernel selects the checkpoint format using a null specification. The input snapshot is
+    /// borrowed; both successful outcomes return an independently owned snapshot that this method
+    /// releases, even when its pointer equals the input pointer. Checkpointing preserves the version.
+    /// </remarks>
+    /// <exception cref="ObjectDisposedException">The session has been disposed.</exception>
+    /// <exception cref="InvalidOperationException">Snapshot construction or checkpointing fails, or Kernel returns an invalid result.</exception>
+    public bool CheckpointSnapshot()
+    {
+        lock (gate)
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            using var path = new Utf8Argument(tableUri);
+            using var builder = new SnapshotBuilderHandle();
+            using var snapshot = new SnapshotHandle();
+            using var checkpointSnapshot = new SnapshotHandle();
+            builder.Initialize(KernelErrors.Unwrap(KernelNativeMethods.get_snapshot_builder(path.Slice, engine)));
+            snapshot.Initialize(KernelErrors.Unwrap(KernelNativeMethods.snapshot_builder_build(builder.Consume())));
+            var snapshotVersion = KernelNativeMethods.version(snapshot);
+            var result = KernelNativeMethods.checkpoint_snapshot(snapshot, engine, nint.Zero);
+            if (result.Tag == 1)
+            {
+                _ = KernelErrors.Unwrap(new NativeHandleResult { Tag = 1, Value = result.Error });
+            }
+
+            if (result.Tag != 0)
+            {
+                throw new InvalidOperationException($"Kernel returned an unknown checkpoint result tag: {result.Tag}.");
+            }
+
+            if (result.OutcomeTag > 1)
+            {
+                throw new InvalidOperationException($"Kernel returned an unknown checkpoint outcome tag: {result.OutcomeTag}.");
+            }
+
+            checkpointSnapshot.Initialize(KernelErrors.Unwrap(new NativeHandleResult { Tag = 0, Value = result.Snapshot }));
+            if (KernelNativeMethods.version(checkpointSnapshot) != snapshotVersion)
+            {
+                throw new InvalidOperationException("Kernel checkpoint changed the snapshot version.");
+            }
+
+            return result.OutcomeTag == 0;
         }
     }
 
@@ -171,7 +222,8 @@ public sealed class NativeStoreSession : IDisposable
             PluginNativeMethods.prototype_callback_count(),
             PluginNativeMethods.prototype_descriptor_size(),
             Marshal.SizeOf<NativeStringSlice>(), Marshal.SizeOf<NativeObjectMetadata>(),
-            Marshal.SizeOf<NativeHandleResult>(), KernelErrors.Allocations, KernelErrors.Releases);
+            Marshal.SizeOf<NativeHandleResult>(), Marshal.SizeOf<NativeCheckpointResult>(),
+            KernelErrors.Allocations, KernelErrors.Releases);
     }
 
     /// <summary>Releases the engine and its final native store reference, once.</summary>
@@ -201,6 +253,7 @@ public sealed class NativeStoreSession : IDisposable
             using var store = new NativeStoreHandle();
             using var initialBuilder = new EngineBuilderHandle();
             using var configuredBuilder = new EngineBuilderHandle();
+            using var tunedBuilder = new EngineBuilderHandle();
             using var path = new Utf8Argument(tableUri);
             store.Initialize(KernelErrors.Unwrap(
                 KernelNativeMethods.get_native_object_store(in ownedDescriptor, KernelErrors.Callback)));
@@ -210,8 +263,10 @@ public sealed class NativeStoreSession : IDisposable
             configuredBuilder.Initialize(KernelErrors.Unwrap(
                 KernelNativeMethods.builder_with_object_store(initialBuilder.Consume(), store)));
             store.Dispose();
+            tunedBuilder.Initialize(KernelNativeMethods.builder_with_multithreaded_executor(
+                configuredBuilder.Consume(), (nuint)2, (nuint)0));
             engineOwner = new EngineHandle();
-            engineOwner.Initialize(KernelErrors.Unwrap(KernelNativeMethods.builder_build(configuredBuilder.Consume())));
+            engineOwner.Initialize(KernelErrors.Unwrap(KernelNativeMethods.builder_build(tunedBuilder.Consume())));
             return new NativeStoreSession(engineOwner, tableUri, allowMemoryAppend ? ownedDescriptor.Context : 0);
         }
         catch

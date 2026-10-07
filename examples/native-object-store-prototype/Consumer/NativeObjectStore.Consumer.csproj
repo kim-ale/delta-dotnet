@@ -7,11 +7,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
-    <Version>0.1.0-prototype.7</Version>
+    <Version>0.1.0-prototype.9</Version>
     <AssemblyVersion>0.1.0</AssemblyVersion>
     <RestoreSources>$(MSBuildThisFileDirectory)../artifacts/feed;https://api.nuget.org/v3/index.json</RestoreSources>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="DeltaKernel.NativePrototype" Version="[0.1.0-prototype.7]" />
+    <PackageReference Include="DeltaKernel.NativePrototype" Version="[0.1.0-prototype.9]" />
   </ItemGroup>
 </Project>

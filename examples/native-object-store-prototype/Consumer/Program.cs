@@ -14,17 +14,19 @@ internal static class Program
             VerifyLayouts();
             GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(1);
             GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(2);
+            GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(3);
             GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(99);
             GivenInvalidTableUrl_WhenEngineBuilderFails_ReleasesAdoptedContext();
             GivenMissingTable_WhenSnapshotBuildFails_PreservesEngineAndFreesErrors();
             await GivenMemoryStore_WhenMutated_SeesNewVersionOnSameEngineAsync();
+            GivenMemoryStore_WhenKernelCheckpoints_WritesOnceAndPreservesVersion();
             GivenIndependentSessions_WhenOneMutates_IsolatesStateAndReleasesOnce();
             await GivenNativeAzure_WhenSnapshotsRepeat_ObservesCredentialRotationAsync();
             await GivenNativeAzure_WhenKernelCommitsInfo_PersistsVersionOneOnSameEngineAsync();
             var final = NativeStoreSession.GetStatistics();
             Require(final.ErrorAllocations == final.ErrorReleases, "All returned Kernel errors must be freed.");
             Console.WriteLine("PASS all public-package native object-store probes");
-            Console.WriteLine("LIMITS Windows x64; snapshot/read and no-Add Kernel commit fixtures; native process credential rotation, not OAuth; no live cloud or production Table integration.");
+            Console.WriteLine("LIMITS Windows x64; snapshot/read, no-Add Kernel commit, and small memory checkpoint fixtures; no multipart coverage through checkpoint; native process credential rotation, not OAuth; no live cloud or production Table integration.");
             return 0;
         }
         catch (Exception exception)
@@ -37,22 +39,34 @@ internal static class Program
     private static void VerifyLayouts()
     {
         var statistics = NativeStoreSession.GetStatistics();
-        Require(Marshal.SizeOf<NativeStoreDescriptor>() == 72, "Managed descriptor must be 72 bytes.");
-        Require(statistics.DescriptorSize == 72, "Independent native descriptor must be 72 bytes.");
+        Require(Marshal.SizeOf<NativeStoreDescriptor>() == 160, "Managed V4 descriptor must be 160 bytes.");
+        Require(statistics.DescriptorSize == 160, "Independent native V4 descriptor must be 160 bytes.");
         Require(statistics.StringSliceSize == 16, "String slices must be 16 bytes.");
-        Require(statistics.ObjectMetadataSize == 32, "Object metadata must be 32 bytes.");
+        Require(statistics.ObjectMetadataSize == 64, "V4 object metadata must be 64 bytes.");
         Require(statistics.HandleResultSize == 16, "Tagged handle results must be 16 bytes.");
+        Require(statistics.CheckpointResultSize == 24, "Nested checkpoint results must be 24 bytes.");
         Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.AbiVersion)).ToInt32() == 0, "Version offset mismatch.");
         Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.StructSize)).ToInt32() == 4, "Size offset mismatch.");
         Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Context)).ToInt32() == 8, "Context offset mismatch.");
         Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Get)).ToInt32() == 16, "GET offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListOpen)).ToInt32() == 24, "LIST open offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListNext)).ToInt32() == 32, "LIST next offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListClose)).ToInt32() == 40, "LIST close offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Put)).ToInt32() == 48, "PUT offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Delete)).ToInt32() == 56, "DELETE offset mismatch.");
-        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Release)).ToInt32() == 64, "Release offset mismatch.");
-        Console.WriteLine("PASS public x64 ABI layouts: v3 descriptor 72, string 16, metadata 32, result 16");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.GetRanges)).ToInt32() == 24, "GET ranges offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListOpen)).ToInt32() == 32, "LIST open offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListNext)).ToInt32() == 40, "LIST next offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListClose)).ToInt32() == 48, "LIST close offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.ListDelimiter)).ToInt32() == 56, "LIST delimiter offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Put)).ToInt32() == 64, "PUT offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.DeleteBatch)).ToInt32() == 72, "DELETE batch offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Copy)).ToInt32() == 80, "COPY offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Rename)).ToInt32() == 88, "RENAME offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.MultipartOpen)).ToInt32() == 96, "Multipart open offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.MultipartPartOpen)).ToInt32() == 104, "Multipart part open offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.MultipartPartWait)).ToInt32() == 112, "Multipart part wait offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.MultipartPartClose)).ToInt32() == 120, "Multipart part close offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.MultipartComplete)).ToInt32() == 128, "Multipart complete offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.MultipartAbort)).ToInt32() == 136, "Multipart abort offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.MultipartClose)).ToInt32() == 144, "Multipart close offset mismatch.");
+        Require(Marshal.OffsetOf<NativeStoreDescriptor>(nameof(NativeStoreDescriptor.Release)).ToInt32() == 152, "Release offset mismatch.");
+        Console.WriteLine("PASS public x64 ABI layouts: v4 descriptor 160, string 16, metadata 64, handle result 16, checkpoint result 24");
     }
 
     private static void GivenRejectedDescriptorVersion_WhenAdopted_ReleasesUnadoptedContext(uint version)
@@ -125,7 +139,32 @@ internal static class Program
         Expect<ObjectDisposedException>(() => session.GetVersion());
         Expect<ObjectDisposedException>(session.AppendCommit);
         Expect<ObjectDisposedException>(() => session.CommitInfo("disposed-session-probe"));
+        Expect<ObjectDisposedException>(() => session.CheckpointSnapshot());
         Console.WriteLine($"PASS memory/list/live mutation 0 -> 1 on one engine; {during.Callbacks - before.Callbacks} native callbacks; serialized callers; final release once");
+    }
+
+    private static void GivenMemoryStore_WhenKernelCheckpoints_WritesOnceAndPreservesVersion()
+    {
+        var before = NativeStoreSession.GetStatistics();
+        using var session = NativeStoreSession.CreateMemory();
+        Require(session.GetVersion() == 0, "The checkpoint fixture must start at version zero.");
+        Require(session.CommitInfo("native-store-checkpoint-probe") == 1, "The public Kernel transaction must commit version one.");
+        Require(session.GetVersion() == 1, "The same engine must read the committed version before checkpointing.");
+        var beforeCheckpoint = NativeStoreSession.GetStatistics();
+        Require(session.CheckpointSnapshot(), "The first public Kernel checkpoint must report Written.");
+        Require(NativeStoreSession.GetStatistics().Callbacks > beforeCheckpoint.Callbacks, "Checkpointing must invoke native store operations.");
+        Require(session.GetVersion() == 1, "A fresh snapshot must read version one after the checkpoint write.");
+        Require(!session.CheckpointSnapshot(), "The repeated public Kernel checkpoint must report AlreadyExists.");
+        Require(session.GetVersion() == 1, "A fresh snapshot must remain at version one after AlreadyExists.");
+        var during = NativeStoreSession.GetStatistics();
+        Require(during.Releases == before.Releases, "Both checkpoint outcomes must leave the engine's native context retained.");
+        Require(during.CredentialRequests == before.CredentialRequests, "The memory checkpoint must not acquire Azure credentials.");
+        Require(during.ErrorAllocations - before.ErrorAllocations == during.ErrorReleases - before.ErrorReleases, "Returned Kernel checkpoint probe errors must be freed.");
+        session.Dispose();
+        session.Dispose();
+        Require(NativeStoreSession.GetStatistics().Releases == before.Releases + 1, "The checkpoint context must release exactly once.");
+        Expect<ObjectDisposedException>(() => session.CheckpointSnapshot());
+        Console.WriteLine($"PASS public Kernel memory commit/checkpoint: version 1, Written then AlreadyExists; fresh snapshots stay at 1; {during.Callbacks - before.Callbacks} native callbacks including writes; final release once; small PUT checkpoint, not multipart coverage");
     }
 
     private static void GivenIndependentSessions_WhenOneMutates_IsolatesStateAndReleasesOnce()

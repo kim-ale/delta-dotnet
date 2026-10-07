@@ -6,7 +6,7 @@ public readonly struct ProbeStatistics
 {
     internal ProbeStatistics(
         ulong releases, ulong credentialRequests, ulong credentialGeneration, ulong callbacks,
-        uint descriptorSize, int stringSliceSize, int metadataSize, int resultSize,
+        uint descriptorSize, int stringSliceSize, int metadataSize, int resultSize, int checkpointResultSize,
         long errorAllocations, long errorReleases)
     {
         Releases = releases;
@@ -17,6 +17,7 @@ public readonly struct ProbeStatistics
         StringSliceSize = stringSliceSize;
         ObjectMetadataSize = metadataSize;
         HandleResultSize = resultSize;
+        CheckpointResultSize = checkpointResultSize;
         ErrorAllocations = errorAllocations;
         ErrorReleases = errorReleases;
     }
@@ -30,7 +31,7 @@ public readonly struct ProbeStatistics
     /// <summary>Gets the largest synthetic credential generation issued by the provider.</summary>
     public ulong CredentialGeneration { get; }
 
-    /// <summary>Gets GET/LIST/PUT/DELETE callback attempts, including failures.</summary>
+    /// <summary>Gets native store operation callback attempts, including failures and checkpoint writes.</summary>
     public ulong Callbacks { get; }
 
     /// <summary>Gets the descriptor size reported by the independent native provider.</summary>
@@ -39,11 +40,14 @@ public readonly struct ProbeStatistics
     /// <summary>Gets the managed size of the public pointer/length string layout.</summary>
     public int StringSliceSize { get; }
 
-    /// <summary>Gets the managed size of the public native object-metadata layout.</summary>
+    /// <summary>Gets the managed size of the V4 native object-metadata layout with ETag and version.</summary>
     public int ObjectMetadataSize { get; }
 
     /// <summary>Gets the managed size of a public tagged handle result.</summary>
     public int HandleResultSize { get; }
+
+    /// <summary>Gets the managed size of the public nested checkpoint result layout.</summary>
+    public int CheckpointResultSize { get; }
 
     /// <summary>Gets the number of managed-owned native Kernel error allocations.</summary>
     public long ErrorAllocations { get; }
