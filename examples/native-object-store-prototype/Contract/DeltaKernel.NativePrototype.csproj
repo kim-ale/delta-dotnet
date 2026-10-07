@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+    <IsPackable>true</IsPackable>
+    <PackageId>DeltaKernel.NativePrototype</PackageId>
+    <Version>0.1.0-prototype.3</Version>
+    <PackageVersion>0.1.0-prototype.3</PackageVersion>
+    <AssemblyVersion>0.1.0</AssemblyVersion>
+    <FileVersion>0.1.0.0</FileVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Description>Isolated Windows x64 prototype of public Kernel native object-store descriptor adoption.</Description>
+    <KernelDll>$(KernelArtifactRoot)/debug/delta_kernel_ffi.dll</KernelDll>
+    <KernelHeader>$(KernelArtifactRoot)/delta_kernel_ffi.h</KernelHeader>
+    <ProviderDll>$(ProviderArtifactRoot)/debug/native_object_store_provider.dll</ProviderDll>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="/" Link="README.md" />
+    <None Include="$(KernelDll)" Condition="Exists('$(KernelDll)')"
+          Pack="true" PackagePath="runtimes/win-x64/native/" Visible="false" />
+    <None Include="$(ProviderDll)" Condition="Exists('$(ProviderDll)')"
+          Pack="true" PackagePath="runtimes/win-x64/native/" Visible="false" />
+    <None Include="$(KernelHeader)" Condition="Exists('$(KernelHeader)')"
+          Pack="true" PackagePath="build/native/include/" Visible="false" />
+    <None Include="$(ProviderHeader)" Condition="'$(ProviderHeader)' != '' and Exists('$(ProviderHeader)')"
+          Pack="true" PackagePath="build/native/include/" Visible="false" />
+  </ItemGroup>
+  <Target Name="ValidatePrototypePackInputs" BeforeTargets="_GetPackageFiles;GenerateNuspec">
+    <Error Condition="'$(KernelArtifactRoot)' == ''"
+           Text="Set KernelArtifactRoot to the existing native target directory. This project does not build Rust." />
+    <Error Condition="'$(ProviderArtifactRoot)' == ''"
+           Text="Set ProviderArtifactRoot to the existing target-provider directory. This project does not build the provider." />
+    <Error Condition="!Exists('$(KernelDll)')" Text="Missing Kernel DLL: $(KernelDll)" />
+    <Error Condition="!Exists('$(KernelHeader)')" Text="Missing generated public Kernel header: $(KernelHeader)" />
+    <Error Condition="!Exists('$(ProviderDll)')" Text="Missing native provider DLL: $(ProviderDll)" />
+  </Target>
+</Project>

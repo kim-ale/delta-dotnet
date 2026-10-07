@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <Version>0.1.0-prototype.3</Version>
+    <AssemblyVersion>0.1.0</AssemblyVersion>
+    <RestoreSources>$(MSBuildThisFileDirectory)../artifacts/feed;https://api.nuget.org/v3/index.json</RestoreSources>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="DeltaKernel.NativePrototype" Version="[0.1.0-prototype.3]" />
+  </ItemGroup>
+</Project>
